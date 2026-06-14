@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--fee", type=float, default=0.0015, help="Phí giao dịch mua/bán (mặc định: 0.15%)")
     parser.add_argument("--tax", type=float, default=0.001, help="Thuế bán chứng khoán (mặc định: 0.1%)")
     parser.add_argument("--no_cache", action="store_true", help="Không sử dụng cache dữ liệu, tải mới hoàn toàn")
+    parser.add_argument("--no_dynamic", action="store_true", help="Vô hiệu hóa quy tắc lịch sử động (chạy tĩnh)")
     
     args = parser.parse_args()
     
@@ -27,7 +28,10 @@ def main():
     print(f"KHỞI CHẠY HỆ THỐNG VN-BACKTEST CHO MÃ: {args.ticker.upper()}")
     print(f"Thời gian: {args.start} -> {args.end}")
     print(f"Vốn ban đầu: {args.cash:,.0f} VND")
-    print(f"Cấu hình: Sàn {args.exchange.upper()} (Biên độ trần/sàn), T+{args.t_settle}, Lô {args.lot_size}")
+    if not args.no_dynamic:
+        print(f"Cấu hình: Sàn {args.exchange.upper()} (Biên độ trần/sàn), Quy tắc lịch sử động (T+2.5/T+3 & Lô 1/10/100)")
+    else:
+        print(f"Cấu hình: Sàn {args.exchange.upper()} (Biên độ trần/sàn), T+{args.t_settle}, Lô {args.lot_size} (Cấu hình tĩnh)")
     print(f"Chi phí: Phí GD {args.fee*100:.2f}%, Thuế bán {args.tax*100:.2f}%")
     print("=" * 60)
     
@@ -77,7 +81,8 @@ def main():
         execution_at="open",
         restrict_ceiling_buy=True,
         restrict_floor_sell=True,
-        slippage=0.0
+        slippage=0.0,
+        dynamic_rules=not args.no_dynamic
     )
     # Inject ticker information into the engine instance so the strategy can access it
     engine.ticker = args.ticker.upper()

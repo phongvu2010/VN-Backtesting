@@ -25,6 +25,7 @@ class BacktestEngine:
         restrict_ceiling_buy: bool = True,    # Cannot buy if price is at Ceiling
         restrict_floor_sell: bool = True,     # Cannot sell if price is at Floor
         slippage: float = 0.0,                # Slippage percentage (e.g. 0.001 = 0.1%)
+        dynamic_rules: bool = True,           # Enable dynamic historical rules
     ):
         self.data = data.copy()
         self.strategy_class = strategy_class
@@ -39,6 +40,11 @@ class BacktestEngine:
         self.restrict_ceiling_buy = restrict_ceiling_buy
         self.restrict_floor_sell = restrict_floor_sell
         self.slippage = slippage
+        self.dynamic_rules = dynamic_rules
+        
+        # Save default settings to fall back to if dynamic_rules is disabled
+        self.default_settlement_days = settlement_days
+        self.default_lot_size = lot_size
 
         # Validate exchange price limit
         if self.exchange == "hose":
@@ -127,6 +133,26 @@ class BacktestEngine:
                 active_settlements.append(item)
         self.settlement_queue = active_settlements
 
+    def _apply_dynamic_rules(self, current_time: pd.Timestamp):
+        """Apply VN historical trading rules based on the date."""
+        # 1. Settlement cycle: T+3 before 29/08/2022, T+2 from 29/08/2022
+        if current_time < pd.Timestamp("2022-08-29"):
+            self.settlement_days = 3
+        else:
+            self.settlement_days = 2
+            
+        # 2. Lot size (HOSE specific):
+        # Before 04/01/2021: lot size = 10
+        # From 04/01/2021 to 11/09/2022 (inclusive): lot size = 100
+        # From 12/09/2022 onwards: lot size = 1 (odd lots allowed)
+        if self.exchange == "hose":
+            if current_time < pd.Timestamp("2021-01-04"):
+                self.lot_size = 10
+            elif current_time < pd.Timestamp("2022-09-12"):
+                self.lot_size = 100
+            else:
+                self.lot_size = 1
+
     def run(self) -> Dict[str, Any]:
         """Run the backtest simulation."""
         # Initialize strategy
@@ -140,6 +166,10 @@ class BacktestEngine:
             strategy.current_idx = idx
             current_time = self.data.index[idx]
             row = self.data.iloc[idx]
+            
+            # 0. Apply dynamic rules if active
+            if self.dynamic_rules:
+                self._apply_dynamic_rules(current_time)
             
             # 1. Process share settlements at start of day
             self._process_settlements(idx)
