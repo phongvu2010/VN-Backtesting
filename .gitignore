@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+data_cache/
+reports/
+
+.DS_Store
+.env
+**/credentials.json
