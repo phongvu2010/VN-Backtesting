@@ -186,3 +186,91 @@ class VNStockDataLoader:
                     pass
             print(f"CẢNH BÁO: Không thể lấy sự kiện doanh nghiệp cho {symbol} ({e}).")
             return pd.DataFrame(columns=cols)
+
+    def fetch_exchange_map(self, use_cache: bool = True) -> dict[str, str]:
+        """
+        Fetch exchange mapping for all symbols and cache it locally to JSON.
+        TTL of 7 days to keep it updated while avoiding daily network costs.
+        """
+        import json
+        cache_path = os.path.join(self.cache_dir, "exchange_map.json")
+        
+        # Check cache freshness (7 days TTL = 168 hours)
+        is_fresh = False
+        if os.path.exists(cache_path):
+            try:
+                mtime = os.path.getmtime(cache_path)
+                age_hours = (datetime.now().timestamp() - mtime) / 3600.0
+                if age_hours < 168.0:
+                    is_fresh = True
+            except Exception:
+                pass
+                
+        if use_cache and is_fresh:
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"CẢNH BÁO: Lỗi đọc cache sàn giao dịch ({e}). Sẽ tải mới.")
+                
+        # Fetch from vnstock Listing
+        exchange_map = {}
+        # Try multiple sources
+        for source in ['KBS', 'VCI', 'MSN']:
+            try:
+                from vnstock import Listing
+                l = Listing(source=source)
+                df_symbols = l.symbols_by_exchange('HOSE')
+                if df_symbols is not None and not df_symbols.empty and 'symbol' in df_symbols.columns and 'exchange' in df_symbols.columns:
+                    df_symbols = df_symbols.dropna(subset=['symbol', 'exchange'])
+                    for _, row in df_symbols.iterrows():
+                        symbol = str(row['symbol']).upper()
+                        exch = str(row['exchange']).lower()
+                        if exch == 'comup':
+                            exch = 'upcom'
+                        elif exch == 'xhnf':
+                            exch = 'hnx'
+                        exchange_map[symbol] = exch
+                    
+                    # Also fetch other exchanges just to be sure
+                    for exch_name in ['HNX', 'UPCOM']:
+                        try:
+                            df_ex = l.symbols_by_exchange(exch_name)
+                            if df_ex is not None and not df_ex.empty:
+                                for _, row in df_ex.iterrows():
+                                    symbol = str(row['symbol']).upper()
+                                    exch = exch_name.lower()
+                                    exchange_map[symbol] = exch
+                        except Exception:
+                            pass
+                            
+                    if exchange_map:
+                        break
+            except Exception:
+                pass
+                
+        # If successfully fetched, write to cache
+        if exchange_map:
+            try:
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(exchange_map, f, ensure_ascii=False, indent=4)
+            except Exception as e:
+                print(f"CẢNH BÁO: Không thể ghi cache sàn giao dịch ({e})")
+        else:
+            # Fallback dictionary of popular stocks
+            # Let's see if we can read from existing cache first even if stale
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, 'r', encoding='utf-8') as f:
+                        exchange_map = json.load(f)
+                except Exception:
+                    pass
+            if not exchange_map:
+                exchange_map = {
+                    'FPT': 'hose', 'HPG': 'hose', 'VNM': 'hose', 'VIC': 'hose', 'VHM': 'hose', 'TCB': 'hose',
+                    'MWG': 'hose', 'SSI': 'hose', 'VND': 'hose', 'VCB': 'hose', 'STB': 'hose', 'MBB': 'hose',
+                    'IDC': 'hnx', 'PVS': 'hnx', 'SHS': 'hnx', 'MBS': 'hnx', 'CEO': 'hnx', 'HUT': 'hnx',
+                    'BSR': 'upcom', 'ACV': 'upcom', 'VEA': 'upcom', 'VGI': 'upcom', 'QNS': 'upcom', 'LTG': 'upcom'
+                }
+                
+        return exchange_map

@@ -526,6 +526,26 @@
                                 <input type="number" id="trailingStop" class="form-control" placeholder="Ví dụ: 10" step="1">
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label for="executionAt">Mô hình giá khớp lệnh</label>
+                            <select id="executionAt" class="form-control" style="background: rgba(15, 23, 42, 0.9); cursor: pointer; color: var(--text-main);">
+                                <option value="open" selected>Khớp giá Mở (Open)</option>
+                                <option value="close">Khớp giá Đóng (Close)</option>
+                                <option value="average">Khớp trung bình (Average/VWAP)</option>
+                                <option value="hl2">Khớp trung bình đỉnh đáy (HL2)</option>
+                                <option value="typical">Khớp giá điển hình (Typical HLC/3)</option>
+                            </select>
+                        </div>
+                        <div class="row-grid">
+                            <div class="form-group">
+                                <label for="slippage">Trượt giá cố định (%)</label>
+                                <input type="number" id="slippage" class="form-control" placeholder="Ví dụ: 0.1" step="0.05" value="0.0">
+                            </div>
+                            <div class="form-group">
+                                <label for="marketImpact">Hệ số tác động TT (Market Impact)</label>
+                                <input type="number" id="marketImpact" class="form-control" placeholder="Ví dụ: 0.1" step="0.05" value="0.0">
+                            </div>
+                        </div>
                         <div class="checkbox-group" onclick="toggleOptimizeCheckbox()">
                             <input type="checkbox" id="optimizeCheckbox">
                             <span>Tối ưu hóa tham số (Grid Search SMA 10/20)</span>
@@ -620,7 +640,8 @@
                     div.className = `report-item ${isActive ? 'active' : ''}`;
                     div.onclick = () => loadReport(rep.filename);
                     div.innerHTML = `
-                        <div class="report-name">${rep.filename}</div>
+                        <div class="report-name" style="display: none;">${rep.filename}</div>
+                        <div class="report-display" style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.25rem;">${rep.display_name || rep.filename}</div>
                         <div class="report-meta">
                             <span>${rep.time}</span>
                             <span>${rep.size_kb} KB</span>
@@ -673,6 +694,9 @@
             const stopLoss = document.getElementById('stopLoss').value;
             const trailingStop = document.getElementById('trailingStop').value;
             const optimize = document.getElementById('optimizeCheckbox').checked;
+            const executionAt = document.getElementById('executionAt').value;
+            const slippage = document.getElementById('slippage').value;
+            const marketImpact = document.getElementById('marketImpact').value;
             
             const payload = {
                 ticker,
@@ -683,6 +707,9 @@
                 margin_ratio: margin ? parseFloat(margin) : 1.0,
                 stop_loss: stopLoss ? parseFloat(stopLoss) : null,
                 trailing_stop: trailingStop ? parseFloat(trailingStop) : null,
+                execution_at: executionAt,
+                slippage: slippage ? parseFloat(slippage) : 0.0,
+                market_impact: marketImpact ? parseFloat(marketImpact) : 0.0,
                 optimize
             };
             
@@ -749,10 +776,11 @@
                         document.getElementById('statusDot').className = "status-dot";
                         
                         // Load generated report if available
-                        if (statusData.report && !statusData.optimize) {
+                        if (statusData.report) {
                             loadReport(statusData.report);
-                        } else if (statusData.optimize) {
-                            document.getElementById('consoleLog').textContent += "\n[OK] Tối ưu hóa tham số hoàn tất. Hãy kiểm tra bảng kết quả trên Console.\n";
+                        }
+                        if (statusData.optimize) {
+                            document.getElementById('consoleLog').textContent += "\n[OK] Tối ưu hóa tham số hoàn tất. Báo cáo kết quả tối ưu đã được tải ở khung bên phải.\n";
                         }
                         
                         fetchReports(); // Refresh history list

@@ -37,6 +37,7 @@ class BacktestEngine:
         margin_maintenance_ratio: float = 0.35, # 35% account equity ratio for margin call liquidation
         ticker: str = None,                   # Optional: Ticker name if data is a single DataFrame
         strategy_params: Dict[str, Any] = None, # Dict of parameters for strategy init
+        market_impact_coef: float = 0.0,      # Market impact coefficient for dynamic slippage
     ):
         # Handle multi-ticker data dict
         if isinstance(data, pd.DataFrame):
@@ -66,6 +67,7 @@ class BacktestEngine:
         self.restrict_ceiling_buy = restrict_ceiling_buy
         self.restrict_floor_sell = restrict_floor_sell
         self.slippage = slippage
+        self.market_impact_coef = market_impact_coef
         self.dynamic_rules = dynamic_rules
         self.advance_interest_rate = advance_interest_rate
         self.auto_close_at_end = auto_close_at_end
@@ -186,9 +188,24 @@ class BacktestEngine:
         })
 
     def _get_execution_price(self, row: pd.Series) -> float:
-        """Calculate execution price accounting for slippage."""
-        price = row['Open'] if self.execution_at == 'open' else row['Close']
-        return price
+        """Calculate base execution price according to the execution model."""
+        exec_mode = self.execution_at.lower()
+        if exec_mode == 'open':
+            return float(row['Open'])
+        elif exec_mode == 'close':
+            return float(row['Close'])
+        elif exec_mode in ['average', 'vwap']:
+            if 'Average' in row and pd.notna(row['Average']) and row['Average'] > 0:
+                return float(row['Average'])
+            # fallback to OHLC average
+            return float((row['Open'] + row['High'] + row['Low'] + row['Close']) / 4.0)
+        elif exec_mode == 'hl2':
+            return float((row['High'] + row['Low']) / 2.0)
+        elif exec_mode == 'typical':
+            return float((row['High'] + row['Low'] + row['Close']) / 3.0)
+        else:
+            # default fallback
+            return float(row['Open'] if exec_mode == 'open' else row['Close'])
 
     def _round_to_tick(self, price: float, exchange: str, direction: str, current_time: pd.Timestamp = None) -> float:
         """
@@ -1003,10 +1020,21 @@ class BacktestEngine:
             # Apply Slippage (only for market orders)
             exec_price = base_price
             if limit_price is None:
+                # Calculate total slippage including market impact
+                total_slippage = self.slippage
+                if self.market_impact_coef > 0.0 and 'Volume' in row and row['Volume'] > 0:
+                    volume_share = qty / row['Volume']
+                    total_slippage += self.market_impact_coef * (volume_share ** 2)
+                
+                # Cap total slippage at 5.0% to keep it realistic
+                total_slippage = min(total_slippage, 0.05)
+                
                 if action == 'buy':
-                    exec_price = exec_price * (1 + self.slippage)
+                    exec_price = exec_price * (1.0 + total_slippage)
+                    order['applied_slippage'] = total_slippage
                 else:
-                    exec_price = exec_price * (1 - self.slippage)
+                    exec_price = exec_price * (1.0 - total_slippage)
+                    order['applied_slippage'] = total_slippage
 
             # Limit price execution (cannot buy above ceiling or sell below floor)
             if exec_price > ceiling:

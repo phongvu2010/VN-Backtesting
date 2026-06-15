@@ -35,6 +35,9 @@ def main():
     parser.add_argument("--optimize", action="store_true", help="Chạy tối ưu hóa tham số chiến lược (Grid Search)")
     parser.add_argument("--rebalance_interval", type=int, default=None, help="Chu kỳ cơ cấu tỷ trọng danh mục theo số phiên (ví dụ: 20)")
     parser.add_argument("--n_jobs", type=int, default=-1, help="Số tiến trình chạy song song khi tối ưu hóa (mặc định: -1 - sử dụng hết CPU)")
+    parser.add_argument("--execution_at", type=str.lower, default="open", choices=["open", "close", "average", "vwap", "hl2", "typical"], help="Mô hình giá khớp lệnh (open, close, average/vwap, hl2, typical)")
+    parser.add_argument("--slippage", type=float, default=0.0, help="Tỷ lệ trượt giá cố định (ví dụ: 0.001 cho 0.1%%)")
+    parser.add_argument("--market_impact", type=float, default=0.0, help="Hệ số tác động thị trường gây trượt giá động (ví dụ: 0.1)")
     
     args = parser.parse_args()
     
@@ -47,6 +50,11 @@ def main():
         config_str += ", Quy tắc lịch sử động (T+2.5/T+3 & Lô 1/10/100)"
     else:
         config_str += f", T+{args.t_settle}, Lô {args.lot_size} (Cấu hình tĩnh)"
+    config_str += f", Khớp lệnh: {args.execution_at.upper()}"
+    if args.slippage > 0:
+        config_str += f", Trượt giá: {args.slippage*100:.2f}%"
+    if args.market_impact > 0:
+        config_str += f", Hệ số tác động TT: {args.market_impact:.2f}"
     if args.allow_odd_lot:
         config_str += ", Cho phép lô lẻ (lô 1)"
     if args.max_vol_ratio is not None:
@@ -67,30 +75,10 @@ def main():
     # Process multiple tickers
     tickers = [t.strip().upper() for t in args.ticker.split(',')]
     
-    # Fetch exchange dynamically from vnstock if possible
-    _exchange_map = {}
-    print("-> Đang tải danh sách sàn giao dịch từ vnstock...")
-    for source in ['VCI', 'KBS', 'MSN']:
-        try:
-            from vnstock import Listing
-            l = Listing(source=source)
-            df_symbols = l.symbols_by_exchange('HOSE')
-            if df_symbols is not None and not df_symbols.empty and 'symbol' in df_symbols.columns and 'exchange' in df_symbols.columns:
-                df_symbols = df_symbols.dropna(subset=['symbol', 'exchange'])
-                for _, row in df_symbols.iterrows():
-                    symbol = str(row['symbol']).upper()
-                    exch = str(row['exchange']).lower()
-                    if exch == 'comup':
-                        exch = 'upcom'
-                    elif exch == 'xhnf':
-                        exch = 'hnx'
-                    _exchange_map[symbol] = exch
-                print(f"   Đã tải thành công {len(_exchange_map)} mã từ vnstock để cấu hình sàn (nguồn: {source}).")
-                break
-        except Exception as e:
-            print(f"   (Cảnh báo: Lấy sàn tự động từ nguồn {source} không thành công: {e})")
-    else:
-        print("   CẢNH BÁO: Tất cả các nguồn dữ liệu vnstock đều không tải được danh sách sàn. Sẽ dùng danh sách mặc định.")
+    # Fetch exchange map using loader with caching
+    print("-> Đang tải danh sách sàn giao dịch...")
+    _exchange_map = loader.fetch_exchange_map(use_cache=not args.no_cache)
+    print(f"   Đã tải thành công {len(_exchange_map)} mã sàn giao dịch.")
 
     stock_data = {}
     exchanges = {}
@@ -187,10 +175,11 @@ def main():
             'sell_tax': args.tax,
             'settlement_days': args.t_settle,
             'lot_size': args.lot_size,
-            'execution_at': "open",
+            'execution_at': args.execution_at,
             'restrict_ceiling_buy': True,
             'restrict_floor_sell': True,
-            'slippage': 0.0,
+            'slippage': args.slippage,
+            'market_impact_coef': args.market_impact,
             'dynamic_rules': not args.no_dynamic,
             'advance_interest_rate': 0.12,
             'auto_close_at_end': True,
@@ -216,8 +205,22 @@ def main():
             n_jobs=args.n_jobs
         )
         
-        optimizer.run_optimization(sort_by="sharpe_ratio", ascending=False)
-        print("Tối ưu hóa tham số hoàn tất.")
+        results_df = optimizer.run_optimization(sort_by="sharpe_ratio", ascending=False)
+        
+        # Generate beautiful HTML Optimization Report
+        reporter = ReportGenerator()
+        report_filename = f"report_opt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        report_path = reporter.generate_optimization_report(
+            results_df=results_df,
+            ticker=",".join(tickers),
+            strategy_name="MA Crossover (SMA Fast vs Slow)",
+            filename=report_filename
+        )
+        
+        abs_report_path = os.path.abspath(report_path)
+        print(f"\n[OK] Đã xuất báo cáo tối ưu hóa HTML thành công!")
+        print(f"-> Báo cáo tối ưu hóa: file://{abs_report_path}")
+        print("=" * 60 + "\n")
         return
 
     # 2. Setup Backtest Engine
@@ -232,10 +235,11 @@ def main():
         settlement_days=args.t_settle,
         lot_size=args.lot_size,
         exchange=exchanges,
-        execution_at="open",
+        execution_at=args.execution_at,
         restrict_ceiling_buy=True,
         restrict_floor_sell=True,
-        slippage=0.0,
+        slippage=args.slippage,
+        market_impact_coef=args.market_impact,
         dynamic_rules=not args.no_dynamic,
         advance_interest_rate=0.12,
         auto_close_at_end=True,

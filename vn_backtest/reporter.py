@@ -298,6 +298,155 @@ class ReportGenerator:
             
         return output_path
 
+    def generate_optimization_report(
+        self,
+        results_df: pd.DataFrame,
+        ticker: str,
+        strategy_name: str,
+        filename: str = "backtest_opt_report.html"
+    ) -> str:
+        """
+        Generate a beautiful, interactive HTML report for the optimization results.
+        Includes a summary of the best parameter set, a responsive leaderboard table,
+        and an interactive 2D Heatmap / Bar chart using Plotly.
+        """
+        # 1. Identify parameter columns vs metric columns
+        metric_cols = {
+            'total_return', 'cagr', 'sharpe_ratio', 'sortino_ratio', 
+            'max_drawdown', 'win_rate', 'profit_factor', 'total_trades'
+        }
+        param_cols = [col for col in results_df.columns if col not in metric_cols]
+        
+        # Sort results by Sharpe Ratio descending
+        results_sorted = results_df.sort_values(by="sharpe_ratio", ascending=False)
+        best_row = results_sorted.iloc[0]
+        
+        # Prepare parameters description for best config
+        best_params_str = ", ".join([f"{p}={best_row[p]}" for p in param_cols])
+        
+        # 2. Draw Plotly visualization based on number of parameter columns
+        fig_opt = go.Figure()
+        
+        if len(param_cols) == 2:
+            p1 = param_cols[0]
+            p2 = param_cols[1]
+            
+            # Construct a pivot table for the heatmap
+            pivot_df = results_df.pivot(index=p1, columns=p2, values='sharpe_ratio')
+            
+            fig_opt.add_trace(go.Heatmap(
+                x=pivot_df.columns,
+                y=pivot_df.index,
+                z=pivot_df.values,
+                colorscale='Viridis',
+                colorbar=dict(title='Sharpe Ratio'),
+                hovertemplate=f'{p2}: %{{x}}<br>{p1}: %{{y}}<br>Sharpe: %{{z}}:.2f<extra></extra>'
+            ))
+            
+            fig_opt.update_layout(
+                title=f'<b>BẢN ĐỒ NHIỆT SHARPE RATIO ({p1.upper()} vs {p2.upper()})</b>',
+                xaxis_title=p2.upper(),
+                yaxis_title=p1.upper(),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                margin=dict(l=40, r=20, t=50, b=40),
+                height=450
+            )
+        elif len(param_cols) == 1:
+            p1 = param_cols[0]
+            df_sorted_p = results_df.sort_values(by=p1)
+            
+            fig_opt.add_trace(go.Scatter(
+                x=df_sorted_p[p1],
+                y=df_sorted_p['sharpe_ratio'],
+                mode='lines+markers',
+                name='Sharpe Ratio',
+                line=dict(color='#00ffcc', width=3),
+                marker=dict(size=8, color='#3b82f6')
+            ))
+            
+            fig_opt.update_layout(
+                title=f'<b>HIỆU QUẢ SHARPE RATIO THEO THAM SỐ {p1.upper()}</b>',
+                xaxis_title=p1.upper(),
+                yaxis_title='Sharpe Ratio',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                margin=dict(l=40, r=20, t=50, b=40),
+                height=450
+            )
+        else:
+            top_n = min(15, len(results_sorted))
+            top_df = results_sorted.head(top_n)
+            
+            labels = []
+            for _, r in top_df.iterrows():
+                lbl = ", ".join([f"{p}:{r[p]}" for p in param_cols])
+                labels.append(lbl)
+                
+            fig_opt.add_trace(go.Bar(
+                x=labels,
+                y=top_df['sharpe_ratio'],
+                marker_color='#00ffcc',
+                opacity=0.85
+            ))
+            
+            fig_opt.update_layout(
+                title='<b>BẢNG XẾP HẠNG TOP THAM SỐ (Sharpe Ratio)</b>',
+                xaxis_title='Tổ hợp tham số',
+                yaxis_title='Sharpe Ratio',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                margin=dict(l=40, r=20, t=50, b=100),
+                height=500
+            )
+            
+        opt_chart_html = pio.to_html(fig_opt, include_plotlyjs=False, full_html=False)
+        
+        # 3. Format results rows for HTML table
+        leaderboard = []
+        for idx, (_, r) in enumerate(results_sorted.iterrows(), 1):
+            leaderboard.append({
+                'rank': idx,
+                'params': ", ".join([f"{p}={r[p]}" for p in param_cols]),
+                'ret': f"{r['total_return']*100:.2f}%",
+                'cagr': f"{r['cagr']*100:.2f}%",
+                'sharpe': f"{r['sharpe_ratio']:.2f}",
+                'sortino': f"{r['sortino_ratio']:.2f}",
+                'drawdown': f"{r['max_drawdown']*100:.2f}%",
+                'win_rate': f"{r['win_rate']*100:.1f}%",
+                'profit_factor': f"{r['profit_factor']:.2f}" if r['profit_factor'] != float('inf') else '∞',
+                'trades': int(r['total_trades'])
+            })
+            
+        best_metrics = {
+            'params': best_params_str,
+            'total_return': best_row['total_return'],
+            'cagr': best_row['cagr'],
+            'sharpe_ratio': best_row['sharpe_ratio'],
+            'sortino_ratio': best_row['sortino_ratio'],
+            'max_drawdown': best_row['max_drawdown'],
+            'win_rate': best_row['win_rate'],
+            'profit_factor': best_row['profit_factor'] if best_row['profit_factor'] != float('inf') else 999.0,
+            'total_trades': int(best_row['total_trades'])
+        }
+        
+        report_title = f"Báo cáo Tối ưu hóa: {ticker} - {strategy_name}"
+        
+        html_content = self.HTML_OPTIMIZATION_TEMPLATE.render(
+            title=report_title,
+            ticker=ticker,
+            strategy_name=strategy_name,
+            best=best_metrics,
+            leaderboard=leaderboard,
+            chart_html=opt_chart_html
+        )
+        
+        output_path = os.path.join(self.output_dir, filename)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+            
+        return output_path
+
     # Jinja2 HTML template with premium design styling (glassmorphism dark mode)
     HTML_TEMPLATE = jinja2.Template("""
 <!DOCTYPE html>
@@ -668,6 +817,305 @@ class ReportGenerator:
                     {% else %}
                     <tr>
                         <td colspan="9" style="text-align: center; color: var(--text-muted);">Không có giao dịch nào được thực hiện.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
+    """)
+
+    # Jinja2 HTML template with premium design styling for optimization results
+    HTML_OPTIMIZATION_TEMPLATE = jinja2.Template("""
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <!-- Include Google Font Inter and Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <!-- Include Plotly JS CDN -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(17, 25, 40, 0.75);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary: #00ffcc;
+            --primary-hover: #00cc99;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 2rem 1.5rem;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Header Style */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .header-title h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #00ffcc 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.3rem;
+        }
+
+        .header-title p {
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        .badge {
+            background: rgba(0, 255, 204, 0.15);
+            color: var(--primary);
+            padding: 0.4rem 1rem;
+            border-radius: 50px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border: 1px solid rgba(0, 255, 204, 0.3);
+            text-transform: uppercase;
+        }
+
+        /* Glassmorphism Card Layout */
+        .grid-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-3px);
+            border-color: rgba(0, 255, 204, 0.25);
+        }
+
+        .metric-label {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.6rem;
+            font-weight: 700;
+            margin-bottom: 0.2rem;
+        }
+
+        .metric-subtext {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        /* Colored metrics */
+        .val-positive {
+            color: var(--success);
+        }
+
+        .val-negative {
+            color: var(--danger);
+        }
+
+        .best-params-badge {
+            background: rgba(0, 255, 204, 0.1);
+            color: var(--primary);
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            border: 1px solid rgba(0, 255, 204, 0.2);
+            font-family: monospace;
+            font-size: 1.1rem;
+            display: inline-block;
+            margin-top: 0.3rem;
+        }
+
+        /* Charts Layout */
+        .chart-container {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            margin-bottom: 2.5rem;
+        }
+
+        /* Table Style */
+        .table-container {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            overflow-x: auto;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        }
+
+        .table-container h3 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.3rem;
+            margin-bottom: 1.2rem;
+            color: var(--text-main);
+            border-left: 4px solid var(--primary);
+            padding-left: 0.75rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+
+        th {
+            color: var(--text-muted);
+            font-weight: 600;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.05em;
+        }
+
+        td {
+            padding: 0.85rem 1rem;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            color: #d1d5db;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-main);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- HEADER -->
+        <header>
+            <div class="header-title">
+                <h1>{{ ticker }} - Tối Ưu Hóa Tham Số</h1>
+                <p>Chiến lược: {{ strategy_name }} • Grid Search Parameter Optimization</p>
+            </div>
+            <div>
+                <span class="badge">Optimization Report</span>
+            </div>
+        </header>
+
+        <!-- DASHBOARD METRICS -->
+        <div class="grid-metrics">
+            <div class="card" style="grid-column: span 2;">
+                <div class="metric-label">Tổ hợp tham số tốt nhất (Sharpe cao nhất)</div>
+                <div class="best-params-badge">{{ best.params }}</div>
+                <div class="metric-subtext" style="margin-top: 0.5rem;">Cơ sở đánh giá xếp hạng: Sharpe Ratio cao nhất.</div>
+            </div>
+            
+            <div class="card">
+                <div class="metric-label">Tổng Lợi Nhuận (Best)</div>
+                <div class="metric-value val-positive">
+                    +{{ (best.total_return * 100) | round(2) }}%
+                </div>
+                <div class="metric-subtext">CAGR: {{ (best.cagr * 100) | round(2) }}%</div>
+            </div>
+
+            <div class="card">
+                <div class="metric-label">Sharpe / Sortino (Best)</div>
+                <div class="metric-value">
+                    {{ best.sharpe_ratio | round(2) }} / {{ best.sortino_ratio | round(2) }}
+                </div>
+                <div class="metric-subtext">Hệ số hiệu quả điều chỉnh rủi ro</div>
+            </div>
+
+            <div class="card">
+                <div class="metric-label">Sụt giảm lớn nhất (Best)</div>
+                <div class="metric-value val-negative">
+                    {{ (best.max_drawdown * 100) | round(2) }}%
+                </div>
+                <div class="metric-subtext">Số lượng khớp: {{ best.total_trades }} giao dịch</div>
+            </div>
+        </div>
+
+        <!-- PLOTLY HEATMAP/CHART -->
+        <div class="chart-container">
+            {{ chart_html }}
+        </div>
+
+        <!-- LEADERBOARD TABLE -->
+        <div class="table-container">
+            <h3>Bảng xếp hạng hiệu năng kịch bản</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Hạng</th>
+                        <th>Tổ Hợp Tham Số</th>
+                        <th>Tổng Lợi Nhuận</th>
+                        <th>CAGR (Năm)</th>
+                        <th>Hệ Số Sharpe</th>
+                        <th>Hệ Số Sortino</th>
+                        <th>Sụt Giảm Lớn Nhất</th>
+                        <th>Tỷ Lệ Thắng</th>
+                        <th>Profit Factor</th>
+                        <th>Số Lệnh</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in leaderboard %}
+                    <tr style="{% if row.rank == 1 %}background: rgba(0, 255, 204, 0.05); font-weight: 600;{% endif %}">
+                        <td>#{{ row.rank }}</td>
+                        <td style="font-family: monospace; color: var(--primary);">{{ row.params }}</td>
+                        <td class="val-positive">{{ row.ret }}</td>
+                        <td>{{ row.cagr }}</td>
+                        <td style="color: #ffffff; font-weight: 500;">{{ row.sharpe }}</td>
+                        <td>{{ row.sortino }}</td>
+                        <td class="val-negative">{{ row.drawdown }}</td>
+                        <td>{{ row.win_rate }}</td>
+                        <td>{{ row.profit_factor }}</td>
+                        <td>{{ row.trades }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
