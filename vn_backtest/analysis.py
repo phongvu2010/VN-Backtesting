@@ -61,8 +61,9 @@ class PerformanceAnalyzer:
             sharpe_ratio = 0.0
 
         # Sortino Ratio
-        downside_returns = daily_returns[daily_returns < 0]
-        downside_vol = downside_returns.std() * np.sqrt(252)
+        # downside deviation: replace positive returns with 0
+        downside_diff = np.minimum(daily_returns, 0.0)
+        downside_vol = np.sqrt(np.mean(downside_diff ** 2)) * np.sqrt(252)
         if downside_vol > 0:
             sortino_ratio = (cagr - risk_free_rate) / downside_vol
         else:
@@ -133,7 +134,8 @@ class PerformanceAnalyzer:
                         days_held_sum += hold_days * matched_qty
                         matched_qty_sum += matched_qty
                         
-                        # Deduct from buy queue
+                        # Deduct from buy queue and update remaining fee
+                        buy_lot['fee'] -= prop_buy_fee
                         buy_lot['qty'] -= matched_qty
                         sell_qty -= matched_qty
                         if buy_lot['qty'] <= 0:
@@ -245,5 +247,6 @@ class PerformanceAnalyzer:
             'benchmark_cagr': benchmark_cagr,
             'outperformance': outperformance,
             'alpha': alpha,
-            'beta': beta
+            'beta': beta,
+            'risk_free_rate': risk_free_rate
         }

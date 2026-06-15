@@ -82,6 +82,11 @@ class VNStockDataLoader:
             # Drop raw 'time' column and other unnecessary columns
             df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
             
+            # Multiply stock prices by 1000 to convert to VND (indices remain in points)
+            if not is_index:
+                for col in ['Open', 'High', 'Low', 'Close']:
+                    df[col] = df[col] * 1000.0
+            
             # Sort chronologically
             df.sort_values('Date', inplace=True)
             df.drop_duplicates(subset=['Date'], keep='first', inplace=True)

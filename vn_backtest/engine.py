@@ -135,11 +135,18 @@ class BacktestEngine:
 
     def _apply_dynamic_rules(self, current_time: pd.Timestamp):
         """Apply VN historical trading rules based on the date."""
-        # 1. Settlement cycle: T+3 before 29/08/2022, T+2 from 29/08/2022
-        if current_time < pd.Timestamp("2022-08-29"):
-            self.settlement_days = 3
-        else:
-            self.settlement_days = 2
+        # 1. Settlement cycle: T+3 before 29/08/2022, T+2 from 29/08/2022.
+        # However, if execution is at open, shares only arrive at 13:00 on T+2, so they can only be sold at T+3 Open.
+        if self.execution_at == 'close':
+            if current_time < pd.Timestamp("2022-08-29"):
+                self.settlement_days = 3
+            else:
+                self.settlement_days = 2
+        else:  # execution_at == 'open'
+            if current_time < pd.Timestamp("2022-08-29"):
+                self.settlement_days = 3
+            else:
+                self.settlement_days = 3
             
         # 2. Lot size (HOSE specific):
         # Before 04/01/2021: lot size = 10
