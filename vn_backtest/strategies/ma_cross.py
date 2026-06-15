@@ -62,12 +62,10 @@ class MACrossover(Strategy):
 
             # Crossover Up: Fast MA cuts above Slow MA -> BUY
             if fast_prev <= slow_prev and fast_curr > slow_curr:
-                if not has_position:
-                    # Allocate equal cash fraction for each stock in portfolio
-                    buy_fraction = 1.0 / len(self.tickers)
-                    self.buy(ticker, size=buy_fraction)
+                # Target weight is equal fraction of portfolio
+                target_pct = 1.0 / len(self.tickers)
+                self.order_target_percent(ticker, target_pct)
 
             # Crossover Down: Fast MA cuts below Slow MA -> SELL
             elif fast_prev >= slow_prev and fast_curr < slow_curr:
-                if has_position:
-                    self.sell(ticker)
+                self.order_target_percent(ticker, 0.0)

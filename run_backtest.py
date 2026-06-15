@@ -1,6 +1,6 @@
 import os
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 from vn_backtest.data import VNStockDataLoader
 from vn_backtest.engine import BacktestEngine
@@ -14,13 +14,21 @@ def main():
     parser.add_argument("--start", type=str, default="2020-01-01", help="Ngày bắt đầu (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default="2026-06-01", help="Ngày kết thúc (YYYY-MM-DD)")
     parser.add_argument("--cash", type=float, default=100_000_000.0, help="Số vốn ban đầu (mặc định: 100M VND)")
-    parser.add_argument("--exchange", type=str, default="hose", choices=["hose", "hnx", "upcom"], help="Sàn giao dịch để áp biên độ trần/sàn (mặc định: hose)")
+    parser.add_argument("--exchange", type=str.lower, default="hose", choices=["hose", "hnx", "upcom"], help="Sàn giao dịch để áp biên độ trần/sàn (mặc định: hose)")
     parser.add_argument("--t_settle", type=int, default=2, help="Chu kỳ thanh toán cổ phiếu (mặc định: T+2)")
     parser.add_argument("--lot_size", type=int, default=100, help="Lô giao dịch tối thiểu (mặc định: 100)")
-    parser.add_argument("--fee", type=float, default=0.0015, help="Phí giao dịch mua/bán (mặc định: 0.15%)")
-    parser.add_argument("--tax", type=float, default=0.001, help="Thuế bán chứng khoán (mặc định: 0.1%)")
+    parser.add_argument("--fee", type=float, default=0.0015, help="Phí giao dịch mua/bán (mặc định: 0.15%%)")
+    parser.add_argument("--tax", type=float, default=0.001, help="Thuế bán chứng khoán (mặc định: 0.1%%)")
     parser.add_argument("--no_cache", action="store_true", help="Không sử dụng cache dữ liệu, tải mới hoàn toàn")
     parser.add_argument("--no_dynamic", action="store_true", help="Vô hiệu hóa quy tắc lịch sử động (chạy tĩnh)")
+    parser.add_argument("--allow_odd_lot", action="store_true", help="Cho phép giao dịch lô lẻ (1 cổ phiếu)")
+    parser.add_argument("--max_vol_ratio", type=float, default=None, help="Tỷ lệ khối lượng giao dịch tối đa so với Volume ngày (ví dụ: 0.1)")
+    parser.add_argument("--exclude_auto_close", action="store_true", help="Loại bỏ các giao dịch tất toán cuối kỳ khỏi thống kê giao dịch")
+    parser.add_argument("--adjust_corp_actions", action="store_true", help="Kích hoạt mô phỏng cổ tức/chia tách (chỉ dùng nếu giá đầu vào chưa điều chỉnh)")
+    parser.add_argument("--margin_ratio", type=float, default=1.0, help="Tỷ lệ ký quỹ (ví dụ: 0.5 là đòn bẩy 2x, mặc định: 1.0 - không margin)")
+    parser.add_argument("--margin_interest", type=float, default=0.13, help="Lãi suất margin năm (mặc định: 13%%)")
+    parser.add_argument("--margin_maintenance", type=float, default=0.35, help="Tỷ lệ ký quỹ duy trì giải chấp (mặc định: 35%%)")
+    parser.add_argument("--rf_rate", type=float, default=0.04, help="Lãi suất phi rủi ro năm (mặc định: 4%%)")
     
     args = parser.parse_args()
     
@@ -28,10 +36,20 @@ def main():
     print(f"KHỞI CHẠY HỆ THỐNG VN-BACKTEST CHO MÃ: {args.ticker.upper()}")
     print(f"Thời gian: {args.start} -> {args.end}")
     print(f"Vốn ban đầu: {args.cash:,.0f} VND")
+    config_str = f"Cấu hình: Sàn {args.exchange.upper()} (Biên độ trần/sàn)"
     if not args.no_dynamic:
-        print(f"Cấu hình: Sàn {args.exchange.upper()} (Biên độ trần/sàn), Quy tắc lịch sử động (T+2.5/T+3 & Lô 1/10/100)")
+        config_str += ", Quy tắc lịch sử động (T+2.5/T+3 & Lô 1/10/100)"
     else:
-        print(f"Cấu hình: Sàn {args.exchange.upper()} (Biên độ trần/sàn), T+{args.t_settle}, Lô {args.lot_size} (Cấu hình tĩnh)")
+        config_str += f", T+{args.t_settle}, Lô {args.lot_size} (Cấu hình tĩnh)"
+    if args.allow_odd_lot:
+        config_str += ", Cho phép lô lẻ (lô 1)"
+    if args.max_vol_ratio is not None:
+        config_str += f", Giới hạn thanh khoản {args.max_vol_ratio*100:.1f}% Volume"
+    if args.adjust_corp_actions:
+        config_str += ", Mô phỏng cổ tức/chia tách"
+    if args.margin_ratio < 1.0:
+        config_str += f", Vay Margin (Ký quỹ {args.margin_ratio*100:.0f}%, Lãi {args.margin_interest*100:.1f}%, Call {args.margin_maintenance*100:.0f}%)"
+    print(config_str)
     print(f"Chi phí: Phí GD {args.fee*100:.2f}%, Thuế bán {args.tax*100:.2f}%")
     print("=" * 60)
     
@@ -41,21 +59,30 @@ def main():
     # Process multiple tickers
     tickers = [t.strip().upper() for t in args.ticker.split(',')]
     
-    # Exchange guess helper
-    def guess_exchange(ticker: str, default_exchange: str) -> str:
-        upcom_tickers = {
-            'ACV', 'VEA', 'BSR', 'VGI', 'MVN', 'MCH', 'QNS', 'FOX', 'LTG', 'MML', 'VTP', 
-            'OIL', 'DVN', 'SGB', 'KLB', 'BAB', 'BVB', 'ABB', 'NAB', 'VBB', 'C4G', 'BDT'
-        }
-        hnx_tickers = {
-            'IDC', 'PVS', 'SHS', 'MBS', 'CEO', 'HUT', 'TNG', 'DTD', 'BVS', 'LAS', 'TAR', 
-            'PVI', 'PVC', 'PVB', 'VCS', 'PGS', 'PLC', 'CAP', 'NSH', 'L14', 'VIG', 'APS'
-        }
-        if ticker in upcom_tickers:
-            return "upcom"
-        elif ticker in hnx_tickers:
-            return "hnx"
-        return default_exchange.lower()
+    # Fetch exchange dynamically from vnstock if possible
+    _exchange_map = {}
+    print("-> Đang tải danh sách sàn giao dịch từ vnstock...")
+    for source in ['VCI', 'KBS', 'MSN']:
+        try:
+            from vnstock import Listing
+            l = Listing(source=source)
+            df_symbols = l.symbols_by_exchange('HOSE')
+            if df_symbols is not None and not df_symbols.empty and 'symbol' in df_symbols.columns and 'exchange' in df_symbols.columns:
+                df_symbols = df_symbols.dropna(subset=['symbol', 'exchange'])
+                for _, row in df_symbols.iterrows():
+                    symbol = str(row['symbol']).upper()
+                    exch = str(row['exchange']).lower()
+                    if exch == 'comup':
+                        exch = 'upcom'
+                    elif exch == 'xhnf':
+                        exch = 'hnx'
+                    _exchange_map[symbol] = exch
+                print(f"   Đã tải thành công {len(_exchange_map)} mã từ vnstock để cấu hình sàn (nguồn: {source}).")
+                break
+        except Exception as e:
+            print(f"   (Cảnh báo: Lấy sàn tự động từ nguồn {source} không thành công: {e})")
+    else:
+        print("   CẢNH BÁO: Tất cả các nguồn dữ liệu vnstock đều không tải được danh sách sàn. Sẽ dùng danh sách mặc định.")
 
     stock_data = {}
     exchanges = {}
@@ -72,6 +99,31 @@ def main():
                 use_cache=not args.no_cache
             )
             stock_data[ticker] = df
+            
+            # Exchange guess helper
+            def guess_exchange(t: str, default_exchange: str) -> str:
+                t_upper = t.upper()
+                if t_upper in _exchange_map:
+                    exch = _exchange_map[t_upper]
+                    if exch in ['hose', 'hnx', 'upcom']:
+                        return exch
+                    elif exch == 'comup':
+                        return 'upcom'
+                
+                upcom_tickers = {
+                    'ACV', 'VEA', 'BSR', 'VGI', 'MVN', 'MCH', 'QNS', 'FOX', 'LTG', 'MML', 'VTP', 
+                    'OIL', 'DVN', 'SGB', 'KLB', 'BAB', 'BVB', 'ABB', 'NAB', 'VBB', 'C4G', 'BDT'
+                }
+                hnx_tickers = {
+                    'IDC', 'PVS', 'SHS', 'MBS', 'CEO', 'HUT', 'TNG', 'DTD', 'BVS', 'LAS', 'TAR', 
+                    'PVI', 'PVC', 'PVB', 'VCS', 'PGS', 'PLC', 'CAP', 'NSH', 'L14', 'VIG', 'APS'
+                }
+                if t_upper in upcom_tickers:
+                    return "upcom"
+                elif t_upper in hnx_tickers:
+                    return "hnx"
+                return default_exchange.lower()
+
             exchanges[ticker] = guess_exchange(ticker, args.exchange)
             print(f"   Đã tải {len(df)} phiên giao dịch cổ phiếu {ticker} (Sàn: {exchanges[ticker].upper()}).")
         except Exception as e:
@@ -89,6 +141,16 @@ def main():
             use_cache=not args.no_cache
         )
         print(f"-> Đã tải {len(benchmark_data)} phiên giao dịch VN-Index.")
+        # Check date range overlap
+        if not benchmark_data.empty:
+            bench_start = benchmark_data.index[0]
+            bench_end = benchmark_data.index[-1]
+            req_start = pd.to_datetime(args.start)
+            req_end = pd.to_datetime(args.end)
+            if bench_start > req_start or bench_end < req_end:
+                print(f"   CẢNH BÁO: Giai đoạn dữ liệu VN-Index ({bench_start.strftime('%Y-%m-%d')} -> {bench_end.strftime('%Y-%m-%d')}) "
+                      f"không bao phủ hoàn toàn khoảng thời gian yêu cầu ({args.start} -> {args.end}). "
+                      f"Các chỉ số Alpha/Beta so sánh có thể bị ảnh hưởng.")
     except Exception as e:
         print(f"CẢNH BÁO: Không thể tải VN-Index làm benchmark ({e}). Sẽ không so sánh với VN-Index.")
 
@@ -110,7 +172,13 @@ def main():
         slippage=0.0,
         dynamic_rules=not args.no_dynamic,
         advance_interest_rate=0.12,
-        auto_close_at_end=True
+        auto_close_at_end=True,
+        allow_odd_lot=args.allow_odd_lot,
+        max_volume_ratio=args.max_vol_ratio,
+        adjust_corporate_actions=args.adjust_corp_actions,
+        margin_ratio=args.margin_ratio,
+        margin_interest_rate=args.margin_interest,
+        margin_maintenance_ratio=args.margin_maintenance
     )
     # Inject tickers information
     engine.ticker = ",".join(tickers)
@@ -123,7 +191,9 @@ def main():
         equity_curve=results['equity_curve'],
         trades=results['trades'],
         benchmark_data=benchmark_data,
-        initial_cash=results['initial_cash']
+        initial_cash=results['initial_cash'],
+        risk_free_rate=args.rf_rate,
+        include_auto_close=not args.exclude_auto_close
     )
     
     # 4. Print Summary to console

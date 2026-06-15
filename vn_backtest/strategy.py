@@ -162,6 +162,16 @@ class Strategy:
         """
         self.engine.place_sell_order(ticker, size, time=self.current_time)
 
+    def order_target_percent(self, ticker: str, target_percent: float) -> None:
+        """
+        Place a target percent order.
+        
+        Args:
+            ticker (str): The ticker symbol.
+            target_percent (float): Target percent of total equity (e.g. 0.2 = 20%, 0.0 = close position).
+        """
+        self.engine.place_target_percent_order(ticker, target_percent, time=self.current_time)
+
     def I(self, func: Callable[..., pd.Series], *args, **kwargs) -> pd.Series:
         """
         Declare and compute an indicator.

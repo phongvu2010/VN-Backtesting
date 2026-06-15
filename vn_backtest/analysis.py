@@ -13,7 +13,8 @@ class PerformanceAnalyzer:
         trades: pd.DataFrame, 
         benchmark_data: pd.DataFrame = None,
         initial_cash: float = 100_000_000.0,
-        risk_free_rate: float = 0.04  # 4% risk-free rate typical in VN
+        risk_free_rate: float = 0.04,  # 4% risk-free rate typical in VN
+        include_auto_close: bool = True
     ) -> Dict[str, Any]:
         """
         Calculate metrics.
@@ -41,7 +42,9 @@ class PerformanceAnalyzer:
         years = duration_days / 365.25
         
         # CAGR
-        if years > 0 and final_equity > 0:
+        if final_equity <= 0:
+            cagr = -1.0
+        elif years > 0:
             cagr = (final_equity / initial_cash) ** (1 / years) - 1
         else:
             cagr = 0.0
@@ -80,7 +83,17 @@ class PerformanceAnalyzer:
         max_dd_duration = int(drawdown_streaks.max()) if not drawdown_streaks.empty else 0
 
         # Trade Statistics
-        total_trades = len(trades)
+        # Filter out auto-closed trades from trade-level stats to avoid skewing win rate/profit factor if requested
+        strategy_trades = trades
+        if not include_auto_close and not trades.empty and 'Note' in trades.columns:
+            strategy_trades = trades[trades['Note'].isna() | (trades['Note'] != 'Auto-closed at end of backtest')]
+
+        # Count only BUY and SELL for trade count statistics
+        actual_buy_sells = pd.DataFrame(columns=trades.columns)
+        if not strategy_trades.empty:
+            actual_buy_sells = strategy_trades[strategy_trades['Action'].isin(['BUY', 'SELL'])]
+        total_trades = len(actual_buy_sells)
+        
         win_rate = 0.0
         profit_factor = 0.0
         avg_trade_return = 0.0
@@ -89,6 +102,11 @@ class PerformanceAnalyzer:
         avg_hold_days = 0.0
 
         if total_trades > 0:
+            # Filter for trade matching (BUY, SELL, and DIVIDEND_STOCK)
+            matching_trades = pd.DataFrame(columns=trades.columns)
+            if not strategy_trades.empty:
+                matching_trades = strategy_trades[strategy_trades['Action'].isin(['BUY', 'SELL', 'DIVIDEND_STOCK'])]
+            
             # We pair BUYs and SELLs to calculate individual trade profits.
             # In simple portfolio trading, a trade starts with a BUY and ends with a SELL.
             # Let's match trades by FIFO per ticker.
@@ -96,7 +114,7 @@ class PerformanceAnalyzer:
             buy_queues = {}
             
             # Sort trades chronologically
-            trades_sorted = trades.sort_values('Date')
+            trades_sorted = matching_trades.sort_values('Date')
             
             for _, t in trades_sorted.iterrows():
                 ticker = t['Ticker']
@@ -105,11 +123,21 @@ class PerformanceAnalyzer:
 
                 if t['Action'] == 'BUY':
                     # Add buying lot
+                    # Include cash advance fee in the buy fee if it was incurred
+                    advance_fee = t['AdvanceFee'] if 'AdvanceFee' in t.index and pd.notna(t['AdvanceFee']) else 0.0
                     buy_queues[ticker].append({
                         'qty': t['Quantity'],
                         'price': t['Price'],
                         'date': t['Date'],
-                        'fee': t['Fee']
+                        'fee': t['Fee'] + advance_fee
+                    })
+                elif t['Action'] == 'DIVIDEND_STOCK':
+                    # Add stock dividend lot with 0 cost and 0 fee
+                    buy_queues[ticker].append({
+                        'qty': t['Quantity'],
+                        'price': 0.0,
+                        'date': t['Date'],
+                        'fee': 0.0
                     })
                 elif t['Action'] == 'SELL':
                     sell_qty = t['Quantity']
@@ -175,9 +203,12 @@ class PerformanceAnalyzer:
                 
                 win_rate = len(wins) / n_completed
                 
-                sum_wins = sum(wins)
-                sum_losses = abs(sum(losses))
-                profit_factor = sum_wins / sum_losses if sum_losses > 0 else float('inf') if sum_wins > 0 else 0.0
+                sum_wins = float(sum(wins))
+                sum_losses = float(abs(sum(losses)))
+                if sum_losses > 1e-4:
+                    profit_factor = sum_wins / sum_losses
+                else:
+                    profit_factor = float('inf') if sum_wins > 1e-4 else 0.0
                 
                 avg_trade_return = np.mean(trade_returns)
                 best_trade = np.max(trade_returns)
@@ -222,7 +253,7 @@ class PerformanceAnalyzer:
             # Beta calculation
             cov = aligned_data['Strategy_Return'].cov(aligned_data['Benchmark_Return'])
             bench_var = aligned_data['Benchmark_Return'].var()
-            if bench_var > 0:
+            if pd.notna(bench_var) and bench_var > 1e-8:
                 beta = cov / bench_var
             else:
                 beta = 1.0
