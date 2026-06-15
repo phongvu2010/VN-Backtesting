@@ -23,3 +23,4 @@ pandas
 numpy
 plotly
 jinja2
+TA-Lib
