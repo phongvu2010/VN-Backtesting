@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.io as pio
-from typing import Dict, Any
+from typing import Dict, Any, Union
 
 # Use dark template for Plotly by default
 pio.templates.default = "plotly_dark"
@@ -18,7 +18,7 @@ class ReportGenerator:
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def _generate_plotly_html(self, equity_df: pd.DataFrame, trades_df: pd.DataFrame, stock_df: pd.DataFrame, benchmark_df: pd.DataFrame = None) -> str:
+    def _generate_plotly_html(self, equity_df: pd.DataFrame, trades_df: pd.DataFrame, stock_df: Union[pd.DataFrame, Dict[str, pd.DataFrame]], benchmark_df: pd.DataFrame = None) -> str:
         """Create the interactive Plotly figures and return their HTML snippets."""
         # 1. Chart 1: Equity Curve vs Benchmark (Normalized to 100)
         fig_equity = go.Figure()
@@ -95,17 +95,27 @@ class ReportGenerator:
         fig_signals = go.Figure()
         
         # Stock close price
-        # Drop timezone from stock_df index if needed
-        stock_df_no_tz = stock_df.copy()
-        stock_df_no_tz.index = stock_df_no_tz.index.tz_localize(None) if stock_df_no_tz.index.tz is not None else stock_df_no_tz.index
-        
-        fig_signals.add_trace(go.Scatter(
-            x=stock_df_no_tz.index,
-            y=stock_df_no_tz['Close'],
-            name='Giá đóng cửa',
-            line=dict(color='#3b82f6', width=2),
-            opacity=0.75
-        ))
+        if isinstance(stock_df, dict):
+            for ticker, df in stock_df.items():
+                df_no_tz = df.copy()
+                df_no_tz.index = df_no_tz.index.tz_localize(None) if df_no_tz.index.tz is not None else df_no_tz.index
+                fig_signals.add_trace(go.Scatter(
+                    x=df_no_tz.index,
+                    y=df_no_tz['Close'],
+                    name=f'Giá đóng cửa {ticker}',
+                    line=dict(width=2),
+                    opacity=0.75
+                ))
+        else:
+            stock_df_no_tz = stock_df.copy()
+            stock_df_no_tz.index = stock_df_no_tz.index.tz_localize(None) if stock_df_no_tz.index.tz is not None else stock_df_no_tz.index
+            fig_signals.add_trace(go.Scatter(
+                x=stock_df_no_tz.index,
+                y=stock_df_no_tz['Close'],
+                name='Giá đóng cửa',
+                line=dict(color='#3b82f6', width=2),
+                opacity=0.75
+            ))
         
         # Filter buy/sell trades
         if not trades_df.empty:
@@ -127,7 +137,7 @@ class ReportGenerator:
                     color='#00ff00',
                     line=dict(color='#052e16', width=1.5)
                 ),
-                text=[f"Mua: {q} CP @ {p:.2f}" for q, p in zip(buys['Quantity'], buys['Price'])],
+                text=[f"{t} Mua: {q} CP @ {p:.2f}" for t, q, p in zip(buys['Ticker'], buys['Quantity'], buys['Price'])],
                 hoverinfo='text+x'
             ))
             
@@ -143,7 +153,7 @@ class ReportGenerator:
                     color='#ff0000',
                     line=dict(color='#450a0a', width=1.5)
                 ),
-                text=[f"Bán: {q} CP @ {p:.2f}" for q, p in zip(sells['Quantity'], sells['Price'])],
+                text=[f"{t} Bán: {q} CP @ {p:.2f}" for t, q, p in zip(sells['Ticker'], sells['Quantity'], sells['Price'])],
                 hoverinfo='text+x'
             ))
 
@@ -173,7 +183,7 @@ class ReportGenerator:
         metrics: Dict[str, Any],
         equity_curve: pd.DataFrame,
         trades: pd.DataFrame,
-        stock_data: pd.DataFrame,
+        stock_data: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
         ticker: str,
         strategy_name: str,
         benchmark_data: pd.DataFrame = None,
@@ -200,6 +210,7 @@ class ReportGenerator:
             for idx, r in trades_sorted.iterrows():
                 trades_list.append({
                     'date': r['Date'].strftime('%d/%m/%Y'),
+                    'ticker': r['Ticker'],
                     'action': r['Action'],
                     'qty': f"{r['Quantity']:,}",
                     'price': f"{r['Price']:.2f}",
@@ -567,7 +578,7 @@ class ReportGenerator:
                     {% for trade in trades %}
                     <tr>
                         <td>{{ trade.date }}</td>
-                        <td>{{ ticker }}</td>
+                        <td>{{ trade.ticker }}</td>
                         <td>
                             <span class="{% if trade.action == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">
                                 {{ trade.action }}

@@ -38,19 +38,45 @@ def main():
     # 1. Load data
     loader = VNStockDataLoader()
     
-    print("\n[1/4] Đang tải dữ liệu cổ phiếu...")
-    try:
-        stock_data = loader.fetch_data(
-            symbol=args.ticker, 
-            start_date=args.start, 
-            end_date=args.end, 
-            is_index=False, 
-            use_cache=not args.no_cache
-        )
-        print(f"-> Đã tải {len(stock_data)} phiên giao dịch cổ phiếu {args.ticker.upper()}.")
-    except Exception as e:
-        print(f"LỖI: Không thể tải dữ liệu cho mã {args.ticker}: {e}")
-        return
+    # Process multiple tickers
+    tickers = [t.strip().upper() for t in args.ticker.split(',')]
+    
+    # Exchange guess helper
+    def guess_exchange(ticker: str, default_exchange: str) -> str:
+        upcom_tickers = {
+            'ACV', 'VEA', 'BSR', 'VGI', 'MVN', 'MCH', 'QNS', 'FOX', 'LTG', 'MML', 'VTP', 
+            'OIL', 'DVN', 'SGB', 'KLB', 'BAB', 'BVB', 'ABB', 'NAB', 'VBB', 'C4G', 'BDT'
+        }
+        hnx_tickers = {
+            'IDC', 'PVS', 'SHS', 'MBS', 'CEO', 'HUT', 'TNG', 'DTD', 'BVS', 'LAS', 'TAR', 
+            'PVI', 'PVC', 'PVB', 'VCS', 'PGS', 'PLC', 'CAP', 'NSH', 'L14', 'VIG', 'APS'
+        }
+        if ticker in upcom_tickers:
+            return "upcom"
+        elif ticker in hnx_tickers:
+            return "hnx"
+        return default_exchange.lower()
+
+    stock_data = {}
+    exchanges = {}
+    
+    print("\n[1/4] Đang tải dữ liệu các cổ phiếu...")
+    for ticker in tickers:
+        print(f"-> Đang tải dữ liệu cho mã: {ticker}...")
+        try:
+            df = loader.fetch_data(
+                symbol=ticker, 
+                start_date=args.start, 
+                end_date=args.end, 
+                is_index=False, 
+                use_cache=not args.no_cache
+            )
+            stock_data[ticker] = df
+            exchanges[ticker] = guess_exchange(ticker, args.exchange)
+            print(f"   Đã tải {len(df)} phiên giao dịch cổ phiếu {ticker} (Sàn: {exchanges[ticker].upper()}).")
+        except Exception as e:
+            print(f"LỖI: Không thể tải dữ liệu cho mã {ticker}: {e}")
+            return
 
     print("\n[2/4] Đang tải dữ liệu benchmark VN-Index...")
     benchmark_data = None
@@ -77,15 +103,17 @@ def main():
         sell_tax=args.tax,
         settlement_days=args.t_settle,
         lot_size=args.lot_size,
-        exchange=args.exchange,
+        exchange=exchanges,
         execution_at="open",
         restrict_ceiling_buy=True,
         restrict_floor_sell=True,
         slippage=0.0,
-        dynamic_rules=not args.no_dynamic
+        dynamic_rules=not args.no_dynamic,
+        advance_interest_rate=0.12,
+        auto_close_at_end=True
     )
-    # Inject ticker information into the engine instance so the strategy can access it
-    engine.ticker = args.ticker.upper()
+    # Inject tickers information
+    engine.ticker = ",".join(tickers)
     
     results = engine.run()
     
@@ -115,10 +143,11 @@ def main():
     print(f"Tổng số giao dịch khớp : {metrics['total_trades']}")
     print(f"Tỷ lệ thắng (Win Rate)  : {metrics['win_rate']*100:.1f}%")
     print(f"Hệ số lợi nhuận (Profit Factor): {metrics['profit_factor']:.2f}")
-    print(f"Hiệu suất TB mỗi lệnh  : {metrics['avg_trade_return']*100:.2f}%")
-    print(f"Lệnh thắng lớn nhất    : {metrics['best_trade']*100:.2f}%")
-    print(f"Lệnh thua lớn nhất     : {metrics['worst_trade']*100:.2f}%")
-    print(f"Thời gian giữ TB       : {metrics['avg_hold_days']} ngày")
+    if 'avg_trade_return' in metrics:
+        print(f"Hiệu suất TB mỗi lệnh  : {metrics['avg_trade_return']*100:.2f}%")
+        print(f"Lệnh thắng lớn nhất    : {metrics['best_trade']*100:.2f}%")
+        print(f"Lệnh thua lớn nhất     : {metrics['worst_trade']*100:.2f}%")
+        print(f"Thời gian giữ TB       : {metrics['avg_hold_days']} ngày")
     
     if benchmark_data is not None:
         print("-" * 60)
@@ -131,14 +160,14 @@ def main():
     
     # 5. Generate beautiful HTML Report
     reporter = ReportGenerator()
-    report_filename = f"report_{args.ticker.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    report_filename = f"report_portfolio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
     
     report_path = reporter.generate_report(
         metrics=metrics,
         equity_curve=results['equity_curve'],
         trades=results['trades'],
         stock_data=stock_data,
-        ticker=args.ticker.upper(),
+        ticker=",".join(tickers),
         strategy_name="MA Crossover (10/20)",
         benchmark_data=benchmark_data,
         filename=report_filename

@@ -9,7 +9,7 @@ class Strategy:
     Base class for writing backtesting strategies.
     Inherit from this class and override init() and next() methods.
     """
-    def __init__(self, data: pd.DataFrame, engine: Any):
+    def __init__(self, data: Any, engine: Any):
         self.data = data
         self.engine = engine
         self._indicators = []
@@ -18,32 +18,89 @@ class Strategy:
     @property
     def current_time(self) -> pd.Timestamp:
         """Get current timestamp of the backtest simulation."""
+        if hasattr(self.engine, 'dates'):
+            return self.engine.dates[self.current_idx]
         return self.data.index[self.current_idx]
 
     @property
     def open(self) -> float:
-        """Get the Open price of the current bar."""
+        """Get the Open price of the current bar for the main ticker."""
+        ticker = getattr(self.engine, 'main_ticker', list(self.data.keys())[0] if isinstance(self.data, dict) else None)
+        if ticker:
+            return self.get_open(ticker)
         return float(self.data['Open'].iloc[self.current_idx])
 
     @property
     def high(self) -> float:
-        """Get the High price of the current bar."""
+        """Get the High price of the current bar for the main ticker."""
+        ticker = getattr(self.engine, 'main_ticker', list(self.data.keys())[0] if isinstance(self.data, dict) else None)
+        if ticker:
+            return self.get_high(ticker)
         return float(self.data['High'].iloc[self.current_idx])
 
     @property
     def low(self) -> float:
-        """Get the Low price of the current bar."""
+        """Get the Low price of the current bar for the main ticker."""
+        ticker = getattr(self.engine, 'main_ticker', list(self.data.keys())[0] if isinstance(self.data, dict) else None)
+        if ticker:
+            return self.get_low(ticker)
         return float(self.data['Low'].iloc[self.current_idx])
 
     @property
     def close(self) -> float:
-        """Get the Close price of the current bar."""
+        """Get the Close price of the current bar for the main ticker."""
+        ticker = getattr(self.engine, 'main_ticker', list(self.data.keys())[0] if isinstance(self.data, dict) else None)
+        if ticker:
+            return self.get_close(ticker)
         return float(self.data['Close'].iloc[self.current_idx])
 
     @property
     def volume(self) -> float:
-        """Get the Volume of the current bar."""
+        """Get the Volume of the current bar for the main ticker."""
+        ticker = getattr(self.engine, 'main_ticker', list(self.data.keys())[0] if isinstance(self.data, dict) else None)
+        if ticker:
+            return self.get_volume(ticker)
         return float(self.data['Volume'].iloc[self.current_idx])
+
+    def get_open(self, ticker: str) -> float:
+        """Get Open price of a specific ticker today."""
+        df = self.data[ticker] if isinstance(self.data, dict) else self.data
+        current_time = self.current_time
+        if current_time in df.index:
+            return float(df.loc[current_time, 'Open'])
+        return float('nan')
+
+    def get_high(self, ticker: str) -> float:
+        """Get High price of a specific ticker today."""
+        df = self.data[ticker] if isinstance(self.data, dict) else self.data
+        current_time = self.current_time
+        if current_time in df.index:
+            return float(df.loc[current_time, 'High'])
+        return float('nan')
+
+    def get_low(self, ticker: str) -> float:
+        """Get Low price of a specific ticker today."""
+        df = self.data[ticker] if isinstance(self.data, dict) else self.data
+        current_time = self.current_time
+        if current_time in df.index:
+            return float(df.loc[current_time, 'Low'])
+        return float('nan')
+
+    def get_close(self, ticker: str) -> float:
+        """Get Close price of a specific ticker today."""
+        df = self.data[ticker] if isinstance(self.data, dict) else self.data
+        current_time = self.current_time
+        if current_time in df.index:
+            return float(df.loc[current_time, 'Close'])
+        return float('nan')
+
+    def get_volume(self, ticker: str) -> float:
+        """Get Volume of a specific ticker today."""
+        df = self.data[ticker] if isinstance(self.data, dict) else self.data
+        current_time = self.current_time
+        if current_time in df.index:
+            return float(df.loc[current_time, 'Volume'])
+        return float('nan')
 
     @property
     def cash(self) -> float:
@@ -108,16 +165,25 @@ class Strategy:
     def I(self, func: Callable[..., pd.Series], *args, **kwargs) -> pd.Series:
         """
         Declare and compute an indicator.
-        This will compute the indicator on the full dataset at start.
+        This will compute the indicator on the dataset at start.
         
-        Args:
-            func (Callable): Function that takes self.data and returns a Pandas Series.
-            *args, **kwargs: Additional arguments to pass to the function.
-            
-        Returns:
-            pd.Series: Computed indicator series.
+        Can be called as:
+            self.I(SMA, 20) -> computes SMA on Close of main ticker
+            self.I(SMA, 'HPG', 20) -> computes SMA on Close of HPG
         """
-        indicator_series = func(self.data, *args, **kwargs)
+        if args and isinstance(args[0], str) and isinstance(self.data, dict) and args[0] in self.data:
+            ticker = args[0]
+            func_args = args[1:]
+            df = self.data[ticker]
+        else:
+            if isinstance(self.data, dict):
+                ticker = getattr(self.engine, 'main_ticker', list(self.data.keys())[0])
+                df = self.data[ticker]
+            else:
+                df = self.data
+            func_args = args
+
+        indicator_series = func(df, *func_args, **kwargs)
         self._indicators.append(indicator_series)
         return indicator_series
 

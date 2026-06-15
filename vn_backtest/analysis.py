@@ -90,18 +90,22 @@ class PerformanceAnalyzer:
 
         if total_trades > 0:
             # We pair BUYs and SELLs to calculate individual trade profits.
-            # In simple portfolio trading, a trade starts with a BUY and ends with a SELL (or vice versa, but no shorting in VN yet).
-            # Let's match trades by FIFO.
+            # In simple portfolio trading, a trade starts with a BUY and ends with a SELL.
+            # Let's match trades by FIFO per ticker.
             completed_trades = []
-            buy_queue = []
+            buy_queues = {}
             
             # Sort trades chronologically
             trades_sorted = trades.sort_values('Date')
             
             for _, t in trades_sorted.iterrows():
+                ticker = t['Ticker']
+                if ticker not in buy_queues:
+                    buy_queues[ticker] = []
+
                 if t['Action'] == 'BUY':
                     # Add buying lot
-                    buy_queue.append({
+                    buy_queues[ticker].append({
                         'qty': t['Quantity'],
                         'price': t['Price'],
                         'date': t['Date'],
@@ -119,6 +123,7 @@ class PerformanceAnalyzer:
                     days_held_sum = 0.0
                     matched_qty_sum = 0
                     
+                    buy_queue = buy_queues[ticker]
                     while sell_qty > 0 and buy_queue:
                         buy_lot = buy_queue[0]
                         matched_qty = min(sell_qty, buy_lot['qty'])
@@ -153,6 +158,7 @@ class PerformanceAnalyzer:
                         avg_hold = days_held_sum / matched_qty_sum
                         
                         completed_trades.append({
+                            'ticker': ticker,
                             'profit': trade_profit,
                             'return': trade_return,
                             'hold_days': avg_hold

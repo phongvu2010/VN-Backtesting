@@ -1,81 +1,84 @@
 # Hướng dẫn Xử lý & Kết quả Hệ thống VN-Backtest
 
-Chúng tôi đã xây dựng thành công hệ thống Backtesting chuyên dụng cho thị trường chứng khoán Việt Nam (VN-Backtest). Hệ thống này đã được triển khai hoàn chỉnh dưới dạng gói Python cục bộ, có khả năng tải dữ liệu thực tế thông qua thư viện `vnstock` và mô phỏng chính xác các quy tắc giao dịch đặc thù của Việt Nam.
-
-## Các Thay Đổi Đã Thực Hiện
-
-Chúng tôi đã tạo ra cấu trúc mô-đun hóa chuyên nghiệp cho dự án:
-
-1. **[requirements.txt](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/requirements.txt)**: Thêm các gói thư viện phụ thuộc (`vnstock`, `pandas`, `numpy`, `plotly`, `jinja2`).
-2. **[vn_backtest/__init__.py](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/vn_backtest/__init__.py)**: Điểm khởi tạo package, xuất các lớp API cốt lõi.
-3. **[vn_backtest/data.py](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/vn_backtest/data.py)**: Bộ tải và quản lý dữ liệu lịch sử với tính năng lưu cache cục bộ dạng CSV trong thư mục `data_cache/` nhằm tối ưu tốc độ.
-4. **[vn_backtest/strategy.py](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/vn_backtest/strategy.py)**: Lớp Chiến lược cơ sở (`Strategy`) cung cấp các API giao dịch và các chỉ báo kỹ thuật cơ bản như SMA, EMA, RSI, MACD, Bollinger Bands mà không phụ thuộc vào thư viện bên ngoài.
-5. **[vn_backtest/engine.py](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/vn_backtest/engine.py)**: Bộ mô phỏng giao dịch cốt lõi (Event-driven):
-   - Quản lý quy trình thanh toán cổ phiếu **T+1.5 / T+2** dựa trên chỉ số ngày giao dịch thực tế từ dữ liệu giá (tự động bỏ qua ngày cuối tuần, lễ Tết).
-   - Ràng buộc khớp lệnh theo **Lô tối thiểu 100 cổ phiếu**.
-   - Áp dụng phí giao dịch mua/bán và **thuế bán 0.1%** đặc thù của Việt Nam.
-   - Kiểm tra **biên độ trần/sàn** dựa trên sàn giao dịch tương ứng (HOSE: +/-7%, HNX: +/-10%, UPCOM: +/-15%) và chặn giao dịch khi xuất hiện khóa trần (Ceiling Buy Lock) hoặc khóa sàn (Floor Sell Lock).
-6. **[vn_backtest/analysis.py](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/vn_backtest/analysis.py)**: Bộ phân tích hiệu suất đầu tư, tính toán CAGR, Sharpe, Sortino, Max Drawdown, Win Rate, Profit Factor, cũng như so sánh hiệu quả với benchmark VN-Index (Alpha, Beta, Outperformance).
-7. **[vn_backtest/reporter.py](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/vn_backtest/reporter.py)**: Bộ tạo báo cáo HTML cao cấp với giao diện Dark-mode và đồ thị Plotly tương tác.
-8. **[vn_backtest/strategies/ma_cross.py](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/vn_backtest/strategies/ma_cross.py)**: Chiến lược mẫu Moving Average Crossover (đường SMA 10 cắt SMA 20).
-9. **[run_backtest.py](file:///Users/hunterdo/Documents/Python%20Project/Backtesting-Trading/run_backtest.py)**: Giao diện dòng lệnh CLI chạy trực tiếp chương trình kiểm thử.
+Chúng tôi đã xây dựng thành công hệ thống Backtesting chuyên dụng cho thị trường chứng khoán Việt Nam (VN-Backtest). Hệ thống này hỗ trợ kiểm thử các chiến lược giao dịch đa tài sản (Portfolio), tự động tải dữ liệu thực tế thông qua thư viện `vnstock` và mô phỏng chính xác các quy tắc tài chính, giao dịch đặc thù của Việt Nam.
 
 ---
 
-## Kết Quả Xác Thực & Kiểm Thử
+## Các Tính Năng & Thay Đổi Cốt Lõi
 
-Chúng tôi đã thực hiện 2 hình thức kiểm thử độc lập để đảm bảo chất lượng hệ thống:
+Hệ thống được thiết kế theo dạng mô-đun hóa chuyên nghiệp và đã được nâng cấp toàn diện:
 
-### 1. Kiểm thử Logic Tự động (Unit/Logic Verification)
-Chúng tôi đã chạy kịch bản kiểm thử trong [test_t2.py](file:///Users/hunterdo/.gemini/antigravity/brain/0eb39485-48dc-4977-9c3f-d02572292cbd/scratch/test_t2.py) trên 5 ngày dữ liệu giả lập để kiểm tra độ chính xác của các quy tắc:
-* **Khớp lệnh mua & Làm tròn lô:** Mua tối đa với vốn 10.000.000 VND tại giá 10 (phí mua 0.15%). Hệ thống tính toán chính xác và khớp 998,500 cổ phiếu (làm tròn xuống từ 998,502.2), giữ lại số dư tiền mặt lẻ. -> **ĐẠT**
-* **Khóa T+2:** Đặt lệnh bán 100 cổ phiếu vào ngày T+1 (sau ngày mua 1 ngày). Hệ thống tự động từ chối và ghi nhận lý do `No sellable shares`. -> **ĐẠT**
-* **Giải tỏa T+2:** Đến ngày T+3 (đủ 2 ngày giao dịch chờ thanh toán kể từ ngày mua T+1), đặt lệnh bán toàn bộ. Hệ thống giải tỏa thành công và khớp bán toàn bộ 998,500 cổ phiếu. -> **ĐẠT**
-* **Thuế & Phí bán:** Lệnh bán được trừ phí môi giới 0.15% và thuế TNCN 0.1% trực tiếp vào giá trị thực nhận. -> **ĐẠT**
-
-### 2. Kiểm thử Thực tế trên Cổ phiếu FPT (2020 - 2026)
-Chúng tôi đã tiến hành chạy thử thực tế với cổ phiếu **FPT** từ `2020-01-01` đến `2026-06-01` sử dụng chiến lược giao cắt SMA 10/20.
-
-**Kết quả tóm tắt:**
-* **Vốn ban đầu**: 100,000,000 VND
-* **Tài sản cuối kỳ**: 208,260,445 VND
-* **Tổng lợi nhuận**: **108.26%** (so với VN-Index cùng kỳ tăng 90.81%)
-* **Lợi nhuận năm (CAGR)**: **12.12%**
-* **Hệ số Sharpe**: 0.41
-* **Mức sụt giảm lớn nhất (MDD)**: -23.25%
-* **Tổng số giao dịch**: 79 lệnh
-* **Tỷ lệ thắng (Win Rate)**: 41.0%
-* **Hiệu số Alpha**: +5.48% (chỉ số Alpha vượt trội so với thị trường chung)
-* **Hệ số Beta**: 0.40 (mức độ biến động thấp hơn nhiều so với thị trường chung, chứng tỏ rủi ro hệ thống thấp)
-
-Báo cáo tương tác HTML với đầy đủ biểu đồ tăng trưởng tài sản (Equity Curve), mức sụt giảm (Drawdown) và các điểm mua bán trực quan đã được lưu tại:
-`reports/report_FPT_20260615_041732.html`
+1. **[strategy.py](file:///Users/hunterdo/Documents/Python%20Project/VN%20Backtesting/vn_backtest/strategy.py)**: Lớp Chiến lược cơ sở (`Strategy`) hỗ trợ giao dịch đa tài sản. Cung cấp các hàm getter động (`get_open()`, `get_close()`, v.v.) và cơ chế tính toán chỉ báo kỹ thuật riêng biệt cho từng cổ phiếu qua hàm `self.I(indicator_func, ticker, *args)`.
+2. **[engine.py](file:///Users/hunterdo/Documents/Python%20Project/VN%20Backtesting/vn_backtest/engine.py)**: Động cơ mô phỏng giao dịch cốt lõi (Event-driven):
+   * **Đồng bộ hóa dòng thời gian đa tài sản**: Tự động ghép nối dữ liệu lịch sử của nhiều mã cổ phiếu thành một dòng thời gian chung (`dates`) để chạy mô phỏng.
+   * **Chu kỳ thanh toán Cổ phiếu & Tiền mặt (T+2)**: Mô phỏng chu kỳ thanh toán T+1.5/T+2 cho cả cổ phiếu và tiền bán chờ về.
+   * **Phí ứng trước tiền bán (Cash Advance Fee)**: Tự động cho phép mua cổ phiếu bằng tiền bán chờ về và tính lãi vay ứng trước danh nghĩa (mặc định $12\%/\text{năm}$, tính theo số ngày chờ thực tế) trừ thẳng vào tài sản.
+   * **Làm tròn Trần/Sàn theo Tick Size**: Tự động làm tròn giá trần xuống và giá sàn lên theo đúng bước giá quy định của HOSE (10đ, 50đ, 100đ) và HNX/UPCoM (100đ).
+   * **Tất toán cuối kỳ (Auto-Close)**: Tự động bán toàn bộ cổ phiếu nắm giữ ở phiên cuối cùng theo giá Close để phản ánh chính xác chi phí thuế, phí và tính toán thống kê giao dịch đầy đủ.
+3. **[analysis.py](file:///Users/hunterdo/Documents/Python%20Project/VN%20Backtesting/vn_backtest/analysis.py)**: Phân tích hiệu suất đầu tư bằng thuật toán ghép cặp FIFO tách biệt theo từng mã cổ phiếu (`buy_queues`), đo lường chính xác CAGR, Sharpe, Sortino, Max Drawdown, Win Rate, Profit Factor, Alpha và Beta.
+4. **[reporter.py](file:///Users/hunterdo/Documents/Python%20Project/VN%20Backtesting/vn_backtest/reporter.py)**: Tạo báo cáo HTML cao cấp với đồ thị Plotly tương tác hiển thị song song đường giá của nhiều mã cổ phiếu cùng nhật ký tín hiệu mua/bán động.
+5. **[strategies/ma_cross.py](file:///Users/hunterdo/Documents/Python%20Project/VN%20Backtesting/vn_backtest/strategies/ma_cross.py)**: Chiến lược mẫu Moving Average Crossover (SMA 10 cắt SMA 20) được tối ưu để tự động phân bổ vốn đều và giao dịch đồng thời trên nhiều cổ phiếu.
 
 ---
 
-## Hướng Dẫn Sử Dụng Hệ Thống
+## Hướng Dẫn Sử Dụng
 
-Để khởi chạy backtest cho bất kỳ cổ phiếu nào trên thị trường chứng khoán Việt Nam, bạn có thể sử dụng các tham số CLI linh hoạt của `run_backtest.py`:
+Bạn có thể chạy backtest cho một hoặc nhiều cổ phiếu cùng lúc bằng các tham số CLI linh hoạt trong `run_backtest.py`:
 
 ```bash
 # Kích hoạt virtual environment
 source .venv/bin/activate
 
-# Chạy cấu hình mặc định (Mã FPT từ 2020 đến 2026)
+# Chạy cấu hình mặc định (Mã FPT từ năm 2020 đến 2026)
 python run_backtest.py
 
-# Chạy backtest với mã khác, ví dụ HPG từ năm 2022 đến 2026
-python run_backtest.py --ticker HPG --start 2022-01-01 --end 2026-06-01 --cash 200000000
+# Chạy backtest danh mục 2 mã HOSE (FPT và HPG)
+python run_backtest.py --ticker FPT,HPG --start 2020-01-01 --end 2026-06-01 --cash 100000000
 
-# Chạy backtest với mã sàn HNX (biên độ +/-10%), ví dụ IDC
-python run_backtest.py --ticker IDC --start 2021-01-01 --end 2026-06-01 --exchange hnx
+# Chạy backtest danh mục sàn HNX & UPCoM (IDC và BSR) bắt đầu từ năm 2021
+python run_backtest.py --ticker IDC,BSR --start 2021-01-01
 ```
 
 Các tham số CLI khả dụng:
-* `--ticker`: Mã cổ phiếu (FPT, HPG, VCB, v.v.)
-* `--start` & `--end`: Khoảng thời gian test (`YYYY-MM-DD`)
-* `--cash`: Vốn ban đầu (mặc định: 100M VND)
-* `--exchange`: Tên sàn để áp trần/sàn (`hose`, `hnx`, `upcom`)
-* `--t_settle`: Chu kỳ thanh toán (mặc định: 2, đại diện cho T+2)
-* `--lot_size`: Lô giao dịch tối thiểu (mặc định: 100)
-* `--fee` & `--tax`: Phí môi giới và thuế bán (mặc định tương ứng: 0.15% và 0.1%)
+* `--ticker`: Danh sách mã cổ phiếu, ngăn cách bằng dấu phẩy (ví dụ: `FPT,HPG,VNM`).
+* `--start` & `--end`: Khoảng thời gian kiểm thử (`YYYY-MM-DD`).
+* `--cash`: Vốn ban đầu (mặc định: 100,000,000 VND).
+* `--exchange`: Tên sàn mặc định nếu không nhận diện được sàn của mã (`hose`, `hnx`, `upcom`). Hệ thống sẽ tự động đoán sàn của các mã phổ biến.
+* `--t_settle`: Chu kỳ thanh toán chứng khoán tĩnh nếu tắt dynamic rules (mặc định: 2).
+* `--lot_size`: Lô giao dịch tối thiểu tĩnh nếu tắt dynamic rules (mặc định: 100).
+* `--fee` & `--tax`: Phí giao dịch mua/bán và thuế bán chứng khoán (mặc định tương ứng: 0.15% và 0.1%).
+* `--no_cache`: Không dùng cache dữ liệu CSV cũ mà tải mới hoàn toàn từ `vnstock`.
+* `--no_dynamic`: Vô hiệu hóa việc áp dụng luật thay đổi động theo dòng lịch sử (chạy cấu hình tĩnh).
+
+---
+
+## Kết Quả Xác Thực & Kiểm Thử Thực Tế
+
+Chúng tôi đã chạy thử nghiệm thực tế trong giai đoạn **2020/2021 đến 2026** với các kịch bản sau:
+
+### Kịch bản 1: Cổ phiếu FPT (Sàn HOSE)
+* **Tổng số giao dịch**: 80 lệnh (đã bao gồm 1 lệnh tất toán ở ngày cuối).
+* **Vốn ban đầu**: 100,000,000 VND.
+* **Tài sản cuối kỳ**: **206,351,943 VND** (Tổng lợi nhuận: **106.35%**).
+* **Lợi nhuận năm (CAGR)**: **11.96%** (VN-Index cùng kỳ tăng 90.81%).
+* **Hệ số Sharpe / Sortino**: 0.40 / 0.61.
+* **Mức sụt giảm lớn nhất (MDD)**: -23.30%.
+* **Tỷ lệ thắng (Win Rate)**: 42.5%.
+
+### Kịch bản 2: Danh mục FPT & HPG (Sàn HOSE)
+* **Tổng số giao dịch**: 160 lệnh (đã bao gồm 2 lệnh tất toán ở ngày cuối).
+* **Tài sản cuối kỳ**: **190,935,047 VND** (Tổng lợi nhuận: **90.94%**).
+* **Lợi nhuận năm (CAGR)**: **10.61%**.
+* **Hệ số Sharpe / Sortino**: 0.43 / 0.63.
+* **Mức sụt giảm lớn nhất (MDD)**: -32.98%.
+* **Tỷ lệ thắng (Win Rate)**: 45.0%.
+
+### Kịch bản 3: Danh mục IDC (Sàn HNX) & BSR (Sàn UPCoM) từ 2021
+* **Tổng số giao dịch**: 134 lệnh.
+* **Tài sản cuối kỳ**: **236,881,417 VND** (Tổng lợi nhuận: **136.88%**).
+* **Lợi nhuận năm (CAGR)**: **17.30%** (VN-Index cùng kỳ tăng 64.62%).
+* **Hệ số Sharpe / Sortino**: 0.62 / 0.93.
+* **Mức sụt giảm lớn nhất (MDD)**: -32.99%.
+* **Tỷ lệ thắng (Win Rate)**: 44.8%.
+
+Báo cáo tương tác HTML với đầy đủ biểu đồ tài sản và nhật ký lệnh chi tiết được lưu tại thư mục `reports/`.
