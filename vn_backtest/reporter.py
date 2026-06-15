@@ -91,170 +91,141 @@ class ReportGenerator:
         fig_dd.update_xaxes(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
         fig_dd.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.05)', range=[-100, 5])
 
-        # 3. Chart 3: Stock Close Price & Buy/Sell Signals
-        if isinstance(stock_df, dict) and len(stock_df) > 1:
+        # 3. Chart 3: Stock Close Price & Buy/Sell Signals (with Interactive Ticker Dropdown)
+        fig_signals = go.Figure()
+        
+        if isinstance(stock_df, dict):
             tickers = list(stock_df.keys())
-            n_tickers = len(tickers)
-            
-            fig_signals = make_subplots(
-                rows=n_tickers, 
-                cols=1, 
-                shared_xaxes=True,
-                vertical_spacing=0.08,
-                subplot_titles=[f"<b>Mã cổ phiếu: {ticker}</b>" for ticker in tickers]
-            )
-            
-            for i, ticker in enumerate(tickers):
-                row_idx = i + 1
-                df = stock_df[ticker]
-                df_no_tz = df.copy()
-                df_no_tz.index = df_no_tz.index.tz_localize(None) if df_no_tz.index.tz is not None else df_no_tz.index
-                
-                # Add price line
-                fig_signals.add_trace(go.Scatter(
-                    x=df_no_tz.index,
-                    y=df_no_tz['Close'],
-                    name=f'Giá đóng cửa {ticker}',
-                    line=dict(width=2),
-                    opacity=0.75
-                ), row=row_idx, col=1)
-                
-                # Add signals for this ticker
-                if not trades_df.empty:
-                    trades_df_no_tz = trades_df.copy()
-                    trades_df_no_tz['Date'] = pd.to_datetime(trades_df_no_tz['Date']).dt.tz_localize(None)
-                    
-                    ticker_trades = trades_df_no_tz[trades_df_no_tz['Ticker'] == ticker]
-                    buys = ticker_trades[ticker_trades['Action'] == 'BUY']
-                    sells = ticker_trades[ticker_trades['Action'] == 'SELL']
-                    
-                    # Add Buy Markers
-                    if not buys.empty:
-                        fig_signals.add_trace(go.Scatter(
-                            x=buys['Date'],
-                            y=buys['Price'],
-                            mode='markers',
-                            name=f'BUY {ticker}',
-                            marker=dict(
-                                symbol='triangle-up',
-                                size=10,
-                                color='#00ff00',
-                                line=dict(color='#052e16', width=1)
-                            ),
-                            text=[f"Mua: {q} CP @ {p:,.0f}" for q, p in zip(buys['Quantity'], buys['Price'])],
-                            hoverinfo='text+x'
-                        ), row=row_idx, col=1)
-                        
-                    # Add Sell Markers
-                    if not sells.empty:
-                        fig_signals.add_trace(go.Scatter(
-                            x=sells['Date'],
-                            y=sells['Price'],
-                            mode='markers',
-                            name=f'SELL {ticker}',
-                            marker=dict(
-                                symbol='triangle-down',
-                                size=10,
-                                color='#ff0000',
-                                line=dict(color='#450a0a', width=1)
-                            ),
-                            text=[f"Bán: {q} CP @ {p:,.0f}" for q, p in zip(sells['Quantity'], sells['Price'])],
-                            hoverinfo='text+x'
-                        ), row=row_idx, col=1)
-            
-            height = max(450, 300 * n_tickers)
-            fig_signals.update_layout(
-                title='<b>ĐIỂM GIAO DỊCH CHI TIẾT THEO MÃ</b>',
-                hovermode='x unified',
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                showlegend=True,
-                margin=dict(l=20, r=20, t=80, b=20),
-                height=height
-            )
-            fig_signals.update_xaxes(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
-            fig_signals.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
         else:
-            # Original Single Ticker Chart
-            fig_signals = go.Figure()
+            tickers = ['PORTFOLIO']
+            stock_df = {'PORTFOLIO': stock_df}
             
-            # Stock close price
-            if isinstance(stock_df, dict):
-                ticker = list(stock_df.keys())[0]
-                df = stock_df[ticker]
-                df_no_tz = df.copy()
-                df_no_tz.index = df_no_tz.index.tz_localize(None) if df_no_tz.index.tz is not None else df_no_tz.index
-                fig_signals.add_trace(go.Scatter(
-                    x=df_no_tz.index,
-                    y=df_no_tz['Close'],
-                    name=f'Giá đóng cửa {ticker}',
-                    line=dict(color='#3b82f6', width=2),
-                    opacity=0.75
-                ))
-            else:
-                stock_df_no_tz = stock_df.copy()
-                stock_df_no_tz.index = stock_df_no_tz.index.tz_localize(None) if stock_df_no_tz.index.tz is not None else stock_df_no_tz.index
-                fig_signals.add_trace(go.Scatter(
-                    x=stock_df_no_tz.index,
-                    y=stock_df_no_tz['Close'],
-                    name='Giá đóng cửa',
-                    line=dict(color='#3b82f6', width=2),
-                    opacity=0.75
-                ))
+        ticker_trace_indices = {}
+        trace_idx = 0
+        
+        for i, ticker in enumerate(tickers):
+            ticker_trace_indices[ticker] = []
+            df = stock_df[ticker]
+            df_no_tz = df.copy()
+            df_no_tz.index = df_no_tz.index.tz_localize(None) if df_no_tz.index.tz is not None else df_no_tz.index
             
-            # Filter buy/sell trades
+            # Close Price Trace
+            fig_signals.add_trace(go.Scatter(
+                x=df_no_tz.index,
+                y=df_no_tz['Close'],
+                name=f'Giá đóng cửa {ticker}',
+                line=dict(width=2, color='#3b82f6' if len(tickers) == 1 else None),
+                opacity=0.8,
+                visible=(i == 0)
+            ))
+            ticker_trace_indices[ticker].append(trace_idx)
+            trace_idx += 1
+            
+            # Buy/Sell Signals Traces
             if not trades_df.empty:
                 trades_df_no_tz = trades_df.copy()
                 trades_df_no_tz['Date'] = pd.to_datetime(trades_df_no_tz['Date']).dt.tz_localize(None)
                 
-                buys = trades_df_no_tz[trades_df_no_tz['Action'] == 'BUY']
-                sells = trades_df_no_tz[trades_df_no_tz['Action'] == 'SELL']
+                ticker_trades = trades_df_no_tz[trades_df_no_tz['Ticker'] == ticker]
+                buys = ticker_trades[ticker_trades['Action'] == 'BUY']
+                sells = ticker_trades[ticker_trades['Action'] == 'SELL']
                 
-                # Add Buy Markers
+                # Add Buy markers
                 fig_signals.add_trace(go.Scatter(
-                    x=buys['Date'],
-                    y=buys['Price'],
+                    x=buys['Date'] if not buys.empty else [],
+                    y=buys['Price'] if not buys.empty else [],
                     mode='markers',
-                    name='Lệnh Mua (BUY)',
+                    name=f'MUA ({ticker})',
                     marker=dict(
                         symbol='triangle-up',
                         size=12,
                         color='#00ff00',
                         line=dict(color='#052e16', width=1.5)
                     ),
-                    text=[f"{t} Mua: {q} CP @ {p:,.0f}" for t, q, p in zip(buys['Ticker'], buys['Quantity'], buys['Price'])],
-                    hoverinfo='text+x'
+                    text=[f"Mua: {q} CP @ {p:,.0f}" for q, p in zip(buys['Quantity'], buys['Price'])] if not buys.empty else [],
+                    hoverinfo='text+x',
+                    visible=(i == 0)
                 ))
+                ticker_trace_indices[ticker].append(trace_idx)
+                trace_idx += 1
                 
-                # Add Sell Markers
+                # Add Sell markers
                 fig_signals.add_trace(go.Scatter(
-                    x=sells['Date'],
-                    y=sells['Price'],
+                    x=sells['Date'] if not sells.empty else [],
+                    y=sells['Price'] if not sells.empty else [],
                     mode='markers',
-                    name='Lệnh Bán (SELL)',
+                    name=f'BÁN ({ticker})',
                     marker=dict(
                         symbol='triangle-down',
                         size=12,
                         color='#ff0000',
                         line=dict(color='#450a0a', width=1.5)
                     ),
-                    text=[f"{t} Bán: {q} CP @ {p:,.0f}" for t, q, p in zip(sells['Ticker'], sells['Quantity'], sells['Price'])],
-                    hoverinfo='text+x'
+                    text=[f"Bán: {q} CP @ {p:,.0f}" for q, p in zip(sells['Quantity'], sells['Price'])] if not sells.empty else [],
+                    hoverinfo='text+x',
+                    visible=(i == 0)
                 ))
-    
-            fig_signals.update_layout(
-                title='<b>ĐIỂM GIAO DỊCH TRÊN ĐỒ THỊ GIÁ</b>',
-                xaxis_title='Ngày',
-                yaxis_title='Giá (VND)',
-                hovermode='x unified',
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                legend=dict(x=0.01, y=0.99, bgcolor='rgba(15, 23, 42, 0.8)'),
-                margin=dict(l=20, r=20, t=50, b=20),
-                height=450
-            )
-            fig_signals.update_xaxes(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
-            fig_signals.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
+                ticker_trace_indices[ticker].append(trace_idx)
+                trace_idx += 1
+            else:
+                # Add empty traces to keep structure consistent
+                fig_signals.add_trace(go.Scatter(x=[], y=[], mode='markers', name=f'MUA ({ticker})', visible=(i == 0)))
+                ticker_trace_indices[ticker].append(trace_idx)
+                trace_idx += 1
+                fig_signals.add_trace(go.Scatter(x=[], y=[], mode='markers', name=f'BÁN ({ticker})', visible=(i == 0)))
+                ticker_trace_indices[ticker].append(trace_idx)
+                trace_idx += 1
+                
+        # Generate dropdown menu buttons
+        updatemenus = []
+        if len(tickers) > 1:
+            buttons = []
+            total_traces = len(fig_signals.data)
+            for i, ticker in enumerate(tickers):
+                visibility = [False] * total_traces
+                for idx in ticker_trace_indices[ticker]:
+                    visibility[idx] = True
+                
+                button = dict(
+                    label=ticker,
+                    method="update",
+                    args=[
+                        {"visible": visibility},
+                        {"title": f"<b>ĐIỂM GIAO DỊCH TRÊN ĐỒ THỊ GIÁ: {ticker}</b>"}
+                    ]
+                )
+                buttons.append(button)
+                
+            updatemenus = [
+                dict(
+                    buttons=buttons,
+                    direction="down",
+                    pad={"r": 10, "t": 10},
+                    showactive=True,
+                    x=0.01,
+                    xanchor="left",
+                    y=1.15,
+                    yanchor="top",
+                    bgcolor="rgba(15, 23, 42, 0.9)",
+                    bordercolor="rgba(255, 255, 255, 0.15)",
+                    font=dict(color="#f3f4f6")
+                )
+            ]
+            
+        fig_signals.update_layout(
+            title=f'<b>ĐIỂM GIAO DỊCH TRÊN ĐỒ THỊ GIÁ: {tickers[0]}</b>',
+            xaxis_title='Ngày',
+            yaxis_title='Giá (VND)',
+            hovermode='x unified',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            legend=dict(x=0.01, y=0.99, bgcolor='rgba(15, 23, 42, 0.8)'),
+            margin=dict(l=20, r=20, t=80, b=20),
+            height=480,
+            updatemenus=updatemenus
+        )
+        fig_signals.update_xaxes(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
+        fig_signals.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
 
         # Convert to HTML snippets (div tags)
         equity_html = pio.to_html(fig_equity, include_plotlyjs=False, full_html=False)
@@ -295,6 +266,7 @@ class ReportGenerator:
             real_trades = trades[trades['Action'] != 'MARGIN_INTEREST']
             trades_sorted = real_trades.sort_values('Date', ascending=False)
             for idx, r in trades_sorted.iterrows():
+                note = r['Note'] if 'Note' in r.index and pd.notna(r['Note']) else ''
                 trades_list.append({
                     'date': r['Date'].strftime('%d/%m/%Y'),
                     'ticker': r['Ticker'],
@@ -304,7 +276,8 @@ class ReportGenerator:
                     'val': f"{r['Value']:,.0f}" if r['Value'] > 1000 else f"{r['Value']:.2f}",
                     'fee': f"{r['Fee']:.2f}",
                     'tax': f"{r['Tax']:.2f}",
-                    'total': f"{r['TotalValue']:,.0f}" if r['TotalValue'] > 1000 else f"{r['TotalValue']:.2f}"
+                    'total': f"{r['TotalValue']:,.0f}" if r['TotalValue'] > 1000 else f"{r['TotalValue']:.2f}",
+                    'note': note
                 })
         
         html_content = self.HTML_TEMPLATE.render(
@@ -669,6 +642,7 @@ class ReportGenerator:
                         <th>Phí GD</th>
                         <th>Thuế bán</th>
                         <th>Thực nhận / Chi</th>
+                        <th>Ghi chú</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -689,6 +663,7 @@ class ReportGenerator:
                         <td class="{% if trade.action in ['SELL', 'DIVIDEND_CASH', 'DIVIDEND_STOCK'] %}val-positive{% endif %}">
                             {{ trade.total }}
                         </td>
+                        <td>{{ trade.note }}</td>
                     </tr>
                     {% else %}
                     <tr>

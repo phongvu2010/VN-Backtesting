@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VN-Backtest - Hệ Thống Mô Phỏng Giao Dịch Chứng Khoán Việt Nam</title>
+    <!-- Include Google Font Inter and Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --bg-sidebar: #0e1322;
+            --card-bg: rgba(17, 25, 40, 0.65);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary: #00ffcc;
+            --primary-hover: #00cc99;
+            --primary-glow: rgba(0, 255, 204, 0.35);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --accent-blue: #3b82f6;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Layout Structure */
+        aside {
+            width: 320px;
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            flex-shrink: 0;
+        }
+
+        main {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow-y: auto;
+            padding: 1.5rem;
+            position: relative;
+        }
+
+        /* Sidebar Header */
+        .sidebar-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .sidebar-header h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.6rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent-blue) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.2rem;
+            letter-spacing: 0.02em;
+        }
+
+        .sidebar-header p {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Sidebar Reports list */
+        .sidebar-content {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 1.25rem 1rem;
+        }
+
+        .sidebar-content h2 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 1rem;
+            padding-left: 0.5rem;
+        }
+
+        .report-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+        }
+
+        .report-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: left;
+        }
+
+        .report-item:hover {
+            border-color: var(--primary);
+            background: rgba(0, 255, 204, 0.03);
+            transform: translateY(-1px);
+        }
+
+        .report-item.active {
+            border-color: var(--primary);
+            background: rgba(0, 255, 204, 0.08);
+            box-shadow: 0 0 12px var(--primary-glow);
+        }
+
+        .report-name {
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+            word-break: break-all;
+            color: var(--text-main);
+        }
+
+        .report-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Main Workspace */
+        .workspace-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+            height: 100%;
+        }
+
+        @media (min-width: 1200px) {
+            .workspace-grid {
+                grid-template-columns: 380px 1fr;
+            }
+        }
+
+        /* Config Card styling (Glassmorphism) */
+        .config-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+            height: fit-content;
+        }
+
+        .config-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--text-main);
+            border-left: 4px solid var(--primary);
+            padding-left: 0.6rem;
+            margin-bottom: 0.2rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+        }
+
+        .form-group label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .form-control {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0.65rem 0.85rem;
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s;
+            width: 100%;
+        }
+
+        .form-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 1px var(--primary-glow);
+        }
+
+        .row-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+
+        /* Collapsible Advanced section */
+        .advanced-header {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--accent-blue);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            user-select: none;
+            margin-top: 0.2rem;
+        }
+
+        .advanced-content {
+            display: none;
+            flex-direction: column;
+            gap: 1rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.04);
+            padding-top: 1rem;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            font-size: 0.85rem;
+            user-select: none;
+            margin-top: 0.3rem;
+        }
+
+        .checkbox-group input {
+            cursor: pointer;
+            accent-color: var(--primary);
+            width: 16px;
+            height: 16px;
+        }
+
+        /* Glowing Action Button */
+        .btn-run {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent-blue) 100%);
+            border: none;
+            border-radius: 8px;
+            color: #052e16;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1rem;
+            font-weight: 700;
+            padding: 0.8rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 255, 204, 0.2);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .btn-run:hover {
+            transform: translateY(-1.5px);
+            box-shadow: 0 6px 20px rgba(0, 255, 204, 0.4);
+            color: #ffffff;
+        }
+
+        .btn-run:active {
+            transform: translateY(0.5px);
+        }
+
+        .btn-run:disabled {
+            background: #1e293b;
+            color: #64748b;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+
+        /* Console Log Viewer Card */
+        .log-card {
+            background: #050811;
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+            height: 250px;
+        }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .log-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--primary);
+            letter-spacing: 0.05em;
+        }
+
+        .log-status {
+            font-size: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--text-muted);
+        }
+
+        .status-dot.active {
+            background-color: var(--primary);
+            box-shadow: 0 0 8px var(--primary);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.4; }
+            50% { opacity: 1; }
+            100% { opacity: 0.4; }
+        }
+
+        .log-console {
+            flex-grow: 1;
+            background: #02040a;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.03);
+            padding: 0.75rem;
+            overflow-y: auto;
+            font-family: 'Fira Code', 'Courier New', monospace;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            color: #d1d5db;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* Report View Area */
+        .report-view {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 500px;
+        }
+
+        .report-placeholder {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .report-placeholder svg {
+            width: 64px;
+            height: 64px;
+            color: rgba(255, 255, 255, 0.1);
+        }
+
+        .report-placeholder h3 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.3rem;
+            color: var(--text-main);
+        }
+
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: transparent;
+            flex-grow: 1;
+        }
+
+        .report-title-bar {
+            background: rgba(14, 20, 35, 0.8);
+            border-bottom: 1px solid var(--border-color);
+            padding: 0.8rem 1.2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .report-title-bar h2 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .btn-external {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-main);
+            padding: 0.35rem 0.75rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        .btn-external:hover {
+            background: rgba(255,255,255,0.1);
+            border-color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- SIDEBAR LIST OF REPORTS -->
+    <aside>
+        <div class="sidebar-header">
+            <h1>VN-Backtest</h1>
+            <p>Hệ thống mô phỏng chứng khoán</p>
+        </div>
+        <div class="sidebar-content">
+            <h2>Lịch sử báo cáo</h2>
+            <div id="reportList" class="report-list">
+                <!-- Report items populated by JS -->
+                <div style="text-align: center; color: var(--text-muted); padding: 1rem; font-size: 0.85rem;">
+                    Đang tải danh sách báo cáo...
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- MAIN DASHBOARD -->
+    <main>
+        <div class="workspace-grid">
+            <!-- Left Side: Config & Console logs -->
+            <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+                
+                <!-- CONFIG CARD -->
+                <div class="config-card">
+                    <div class="config-title">Tham số Backtest</div>
+                    
+                    <!-- Ticker -->
+                    <div class="form-group">
+                        <label for="ticker">Mã Cổ Phiếu (phân tách bằng dấu phẩy)</label>
+                        <input type="text" id="ticker" class="form-control" placeholder="Ví dụ: FPT, HPG, VNM" value="FPT">
+                    </div>
+                    
+                    <!-- Dates -->
+                    <div class="row-grid">
+                        <div class="form-group">
+                            <label for="start">Từ ngày</label>
+                            <input type="date" id="start" class="form-control" value="2020-01-01">
+                        </div>
+                        <div class="form-group">
+                            <label for="end">Đến ngày</label>
+                            <input type="date" id="end" class="form-control" value="2026-06-01">
+                        </div>
+                    </div>
+                    
+                    <!-- Initial cash -->
+                    <div class="form-group">
+                        <label for="cash">Vốn khởi đầu (VND)</label>
+                        <input type="number" id="cash" class="form-control" value="100000000" step="10000000">
+                    </div>
+                    
+                    <!-- Rebalance & Margin -->
+                    <div class="row-grid">
+                        <div class="form-group">
+                            <label for="rebalance">Chu kỳ cơ cấu (phiên)</label>
+                            <input type="number" id="rebalance" class="form-control" placeholder="Trống - Không cơ cấu" value="">
+                        </div>
+                        <div class="form-group">
+                            <label for="margin">Tỷ lệ ký quỹ (Margin)</label>
+                            <input type="number" id="margin" class="form-control" value="1.0" step="0.1" min="0.3" max="1.0" placeholder="1.0 - Không margin">
+                        </div>
+                    </div>
+
+                    <!-- Toggle Advanced options -->
+                    <div class="advanced-header" onclick="toggleAdvanced()">
+                        <span id="advancedArrow">▶</span> Cấu hình nâng cao (SL / TS / Grid)
+                    </div>
+                    
+                    <!-- Advanced content -->
+                    <div id="advancedContent" class="advanced-content">
+                        <div class="row-grid">
+                            <div class="form-group">
+                                <label for="stopLoss">Cắt lỗ Stop Loss (%)</label>
+                                <input type="number" id="stopLoss" class="form-control" placeholder="Ví dụ: 7" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label for="trailingStop">Chặn lãi Trailing Stop (%)</label>
+                                <input type="number" id="trailingStop" class="form-control" placeholder="Ví dụ: 10" step="1">
+                            </div>
+                        </div>
+                        <div class="checkbox-group" onclick="toggleOptimizeCheckbox()">
+                            <input type="checkbox" id="optimizeCheckbox">
+                            <span>Tối ưu hóa tham số (Grid Search SMA 10/20)</span>
+                        </div>
+                    </div>
+
+                    <!-- Run button -->
+                    <button id="runBtn" class="btn-run" onclick="startBacktest()">Khởi chạy Backtest</button>
+                </div>
+
+                <!-- CONSOLE LOGS -->
+                <div class="log-card">
+                    <div class="log-header">
+                        <div class="log-title">Console Output Log</div>
+                        <div class="log-status">
+                            <span id="statusDot" class="status-dot"></span>
+                            <span id="statusText" style="color: var(--text-muted)">Idle</span>
+                        </div>
+                    </div>
+                    <div id="consoleLog" class="log-console">Sẵn sàng chạy backtest...</div>
+                </div>
+
+            </div>
+
+            <!-- Right Side: Report View Area -->
+            <div class="report-view">
+                <div id="reportTitleBar" class="report-title-bar" style="display: none;">
+                    <h2 id="reportTitle">Báo cáo hiệu suất</h2>
+                    <a id="externalLink" href="#" target="_blank" class="btn-external">
+                        Mở tab mới
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+                    </a>
+                </div>
+                
+                <!-- Report placeholder when not loaded -->
+                <div id="reportPlaceholder" class="report-placeholder">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path>
+                        <path d="M22 12A10 10 0 0 0 12 2v10z"></path>
+                    </svg>
+                    <h3>Chưa có báo cáo nào được chọn</h3>
+                    <p>Hãy thiết lập cấu hình và chạy Backtest mới ở bảng bên trái,<br>hoặc chọn một báo cáo có sẵn từ danh sách lịch sử ở sidebar.</p>
+                </div>
+
+                <!-- Iframe for HTML report -->
+                <iframe id="reportIframe" style="display: none;"></iframe>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Advanced Section Toggle
+        function toggleAdvanced() {
+            const content = document.getElementById('advancedContent');
+            const arrow = document.getElementById('advancedArrow');
+            if (content.style.display === 'flex') {
+                content.style.display = 'none';
+                arrow.textContent = '▶';
+            } else {
+                content.style.display = 'flex';
+                arrow.textContent = '▼';
+            }
+        }
+
+        function toggleOptimizeCheckbox() {
+            const cb = document.getElementById('optimizeCheckbox');
+            cb.checked = !cb.checked;
+        }
+
+        // Global state variable
+        let isRunning = false;
+        let pollInterval = null;
+
+        // Fetch reports history on load
+        async function fetchReports() {
+            try {
+                const response = await fetch('/api/reports');
+                const data = await response.json();
+                const container = document.getElementById('reportList');
+                container.innerHTML = '';
+                
+                if (data.length === 0) {
+                    container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 1rem; font-size: 0.85rem;">Không có báo cáo cũ.</div>`;
+                    return;
+                }
+                
+                data.forEach(rep => {
+                    const activeReportName = document.getElementById('reportIframe').src.split('/').pop();
+                    const isActive = activeReportName === rep.filename;
+                    
+                    const div = document.createElement('div');
+                    div.className = `report-item ${isActive ? 'active' : ''}`;
+                    div.onclick = () => loadReport(rep.filename);
+                    div.innerHTML = `
+                        <div class="report-name">${rep.filename}</div>
+                        <div class="report-meta">
+                            <span>${rep.time}</span>
+                            <span>${rep.size_kb} KB</span>
+                        </div>
+                    `;
+                    container.appendChild(div);
+                });
+            } catch (err) {
+                console.error("Lỗi lấy danh sách báo cáo:", err);
+            }
+        }
+
+        // Load a specific report file into iframe
+        function loadReport(filename) {
+            const iframe = document.getElementById('reportIframe');
+            const placeholder = document.getElementById('reportPlaceholder');
+            const titleBar = document.getElementById('reportTitleBar');
+            const extLink = document.getElementById('externalLink');
+            const title = document.getElementById('reportTitle');
+            
+            iframe.src = `/reports/${filename}`;
+            iframe.style.display = 'block';
+            placeholder.style.display = 'none';
+            titleBar.style.display = 'flex';
+            extLink.href = `/reports/${filename}`;
+            title.textContent = `Báo cáo: ${filename}`;
+            
+            // Update active report in list
+            const items = document.querySelectorAll('.report-item');
+            items.forEach(item => {
+                const name = item.querySelector('.report-name').textContent;
+                if (name === filename) {
+                    item.classList.add('active');
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+
+        // Send API command to start backtest
+        async function startBacktest() {
+            if (isRunning) return;
+            
+            const ticker = document.getElementById('ticker').value;
+            const start = document.getElementById('start').value;
+            const end = document.getElementById('end').value;
+            const cash = document.getElementById('cash').value;
+            const rebalance = document.getElementById('rebalance').value;
+            const margin = document.getElementById('margin').value;
+            const stopLoss = document.getElementById('stopLoss').value;
+            const trailingStop = document.getElementById('trailingStop').value;
+            const optimize = document.getElementById('optimizeCheckbox').checked;
+            
+            const payload = {
+                ticker,
+                start,
+                end,
+                cash: parseFloat(cash),
+                rebalance_interval: rebalance ? parseInt(rebalance) : null,
+                margin_ratio: margin ? parseFloat(margin) : 1.0,
+                stop_loss: stopLoss ? parseFloat(stopLoss) : null,
+                trailing_stop: trailingStop ? parseFloat(trailingStop) : null,
+                optimize
+            };
+            
+            // Update UI to running state
+            isRunning = true;
+            document.getElementById('runBtn').disabled = true;
+            document.getElementById('runBtn').textContent = "Đang Backtest...";
+            document.getElementById('statusDot').className = "status-dot active";
+            document.getElementById('statusText').textContent = "Running";
+            document.getElementById('statusText').style.color = "var(--primary)";
+            document.getElementById('consoleLog').textContent = "Đang khởi tạo tiến trình Python...\n";
+            
+            try {
+                const response = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await response.json();
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                // Start polling logs and status
+                startPolling();
+            } catch (err) {
+                alert(`Lỗi: ${err.message}`);
+                stopRunningState("Idle", "var(--text-muted)");
+                document.getElementById('consoleLog').textContent += `\n❌ LỖI: ${err.message}\n`;
+            }
+        }
+
+        // Polling function for status & log updates
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            
+            // Poll logs every 500ms, status every 1s
+            pollInterval = setInterval(async () => {
+                // 1. Fetch latest log
+                try {
+                    const logRes = await fetch('/api/log');
+                    const text = await logRes.text();
+                    const consoleElement = document.getElementById('consoleLog');
+                    
+                    // Keep scroll at bottom if already at bottom
+                    const isScrolledToBottom = consoleElement.scrollHeight - consoleElement.clientHeight <= consoleElement.scrollTop + 50;
+                    consoleElement.textContent = text;
+                    if (isScrolledToBottom) {
+                        consoleElement.scrollTop = consoleElement.scrollHeight;
+                    }
+                } catch (e) {
+                    console.error("Lỗi đọc log:", e);
+                }
+                
+                // 2. Fetch process status
+                try {
+                    const statusRes = await fetch('/api/status');
+                    const statusData = await statusRes.json();
+                    
+                    if (statusData.status === 'completed') {
+                        clearInterval(pollInterval);
+                        stopRunningState("Completed", "var(--success)");
+                        document.getElementById('statusDot').className = "status-dot";
+                        
+                        // Load generated report if available
+                        if (statusData.report && !statusData.optimize) {
+                            loadReport(statusData.report);
+                        } else if (statusData.optimize) {
+                            document.getElementById('consoleLog').textContent += "\n[OK] Tối ưu hóa tham số hoàn tất. Hãy kiểm tra bảng kết quả trên Console.\n";
+                        }
+                        
+                        fetchReports(); // Refresh history list
+                    } else if (statusData.status === 'failed') {
+                        clearInterval(pollInterval);
+                        stopRunningState("Failed", "var(--danger)");
+                        document.getElementById('statusDot').className = "status-dot";
+                        document.getElementById('statusDot').style.backgroundColor = "var(--danger)";
+                        document.getElementById('consoleLog').textContent += `\n❌ LỖI: Tiến trình kết thúc với mã lỗi ${statusData.error_code}.\n`;
+                        fetchReports();
+                    }
+                } catch (e) {
+                    console.error("Lỗi lấy trạng thái:", e);
+                }
+            }, 1000);
+        }
+
+        function stopRunningState(text, color) {
+            isRunning = false;
+            document.getElementById('runBtn').disabled = false;
+            document.getElementById('runBtn').textContent = "Khởi chạy Backtest";
+            document.getElementById('statusText').textContent = text;
+            document.getElementById('statusText').style.color = color;
+        }
+
+        // Initialize lists on load
+        fetchReports();
+        
+        // Also check if a process is already running on page load (recovery)
+        async function checkRecovery() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                if (data.status === 'running') {
+                    isRunning = true;
+                    document.getElementById('runBtn').disabled = true;
+                    document.getElementById('runBtn').textContent = "Đang Backtest...";
+                    document.getElementById('statusDot').className = "status-dot active";
+                    document.getElementById('statusText').textContent = "Running (Khôi phục)";
+                    document.getElementById('statusText').style.color = "var(--primary)";
+                    startPolling();
+                }
+            } catch (e) {
+                console.error("Lỗi khôi phục tiến trình:", e);
+            }
+        }
+        checkRecovery();
+    </script>
+</body>
+</html>

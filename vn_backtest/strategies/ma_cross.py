@@ -10,15 +10,22 @@ class MACrossover(Strategy):
     Sells when the fast SMA crosses below the slow SMA.
     Works for both single-ticker and multi-ticker backtests.
     """
-    def __init__(self, data: Any, engine):
-        super().__init__(data, engine)
-        self.fast_period = 10
-        self.slow_period = 20
+    def __init__(self, data: Any, engine, **kwargs):
+        super().__init__(data, engine, **kwargs)
+        if not hasattr(self, 'fast_period'):
+            self.fast_period = 10
+        if not hasattr(self, 'slow_period'):
+            self.slow_period = 20
         # Determine tickers list
         if isinstance(self.data, dict):
             self.tickers = list(self.data.keys())
         else:
             self.tickers = [getattr(self.engine, 'ticker', 'FPT')]
+            
+        # Rebalancing settings
+        if not hasattr(self, 'rebalance_interval'):
+            self.rebalance_interval = None
+        self.days_since_rebalance = 0
 
     def init(self):
         # Precompute indicators for each ticker
@@ -30,6 +37,14 @@ class MACrossover(Strategy):
             self.slow_mas[ticker] = self.I(SMA, ticker, self.slow_period)
 
     def next(self):
+        # Check for periodic rebalancing
+        do_rebalance = False
+        if hasattr(self, 'rebalance_interval') and self.rebalance_interval is not None and self.rebalance_interval > 0:
+            self.days_since_rebalance += 1
+            if self.days_since_rebalance >= self.rebalance_interval:
+                do_rebalance = True
+                self.days_since_rebalance = 0
+
         # Loop through all tickers in the portfolio
         for ticker in self.tickers:
             ticker_df = self.data[ticker] if isinstance(self.data, dict) else self.data
@@ -42,6 +57,11 @@ class MACrossover(Strategy):
             # Get integer index of current_time in ticker's DataFrame
             ticker_idx = ticker_df.index.get_loc(current_time)
             if ticker_idx < 1:
+                continue
+
+            row = ticker_df.iloc[ticker_idx]
+            # Skip if ticker wasn't traded (e.g. before listing or suspended)
+            if 'Traded' in row and row['Traded'] == 0:
                 continue
 
             fast_ma = self.fast_mas[ticker]
@@ -69,3 +89,8 @@ class MACrossover(Strategy):
             # Crossover Down: Fast MA cuts below Slow MA -> SELL
             elif fast_prev >= slow_prev and fast_curr < slow_curr:
                 self.order_target_percent(ticker, 0.0)
+
+            # Periodic Rebalance: Adjust active positions back to target weight
+            elif do_rebalance and has_position:
+                target_pct = 1.0 / len(self.tickers)
+                self.order_target_percent(ticker, target_pct)

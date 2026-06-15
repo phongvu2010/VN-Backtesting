@@ -29,6 +29,12 @@ def main():
     parser.add_argument("--margin_interest", type=float, default=0.13, help="Lãi suất margin năm (mặc định: 13%%)")
     parser.add_argument("--margin_maintenance", type=float, default=0.35, help="Tỷ lệ ký quỹ duy trì giải chấp (mặc định: 35%%)")
     parser.add_argument("--rf_rate", type=float, default=0.04, help="Lãi suất phi rủi ro năm (mặc định: 4%%)")
+    parser.add_argument("--force_adjusted", type=str.lower, default="auto", choices=["auto", "true", "false"], help="Ép buộc trạng thái điều chỉnh giá (auto: tự động phát hiện, true: đã điều chỉnh, false: chưa điều chỉnh)")
+    parser.add_argument("--stop_loss", type=float, default=None, help="Tỷ lệ cắt lỗ Stop Loss (ví dụ: 0.07 cho 7%%)")
+    parser.add_argument("--trailing_stop", type=float, default=None, help="Tỷ lệ chặn lãi Trailing Stop (ví dụ: 0.1 cho 10%%)")
+    parser.add_argument("--optimize", action="store_true", help="Chạy tối ưu hóa tham số chiến lược (Grid Search)")
+    parser.add_argument("--rebalance_interval", type=int, default=None, help="Chu kỳ cơ cấu tỷ trọng danh mục theo số phiên (ví dụ: 20)")
+    parser.add_argument("--n_jobs", type=int, default=-1, help="Số tiến trình chạy song song khi tối ưu hóa (mặc định: -1 - sử dụng hết CPU)")
     
     args = parser.parse_args()
     
@@ -46,9 +52,11 @@ def main():
     if args.max_vol_ratio is not None:
         config_str += f", Giới hạn thanh khoản {args.max_vol_ratio*100:.1f}% Volume"
     if args.adjust_corp_actions:
-        config_str += ", Mô phỏng cổ tức/chia tách"
+        config_str += f", Mô phỏng cổ tức/chia tách (Force Adjusted: {args.force_adjusted.upper()})"
     if args.margin_ratio < 1.0:
         config_str += f", Vay Margin (Ký quỹ {args.margin_ratio*100:.0f}%, Lãi {args.margin_interest*100:.1f}%, Call {args.margin_maintenance*100:.0f}%)"
+    if args.rebalance_interval is not None:
+        config_str += f", Cơ cấu danh mục ({args.rebalance_interval} phiên/lần)"
     print(config_str)
     print(f"Chi phí: Phí GD {args.fee*100:.2f}%, Thuế bán {args.tax*100:.2f}%")
     print("=" * 60)
@@ -154,6 +162,64 @@ def main():
     except Exception as e:
         print(f"CẢNH BÁO: Không thể tải VN-Index làm benchmark ({e}). Sẽ không so sánh với VN-Index.")
 
+    # Prepare strategy parameters (Stop Loss, Trailing Stop, Rebalance Interval)
+    strat_params = {}
+    if args.stop_loss is not None:
+        strat_params['stop_loss'] = args.stop_loss
+    if args.trailing_stop is not None:
+        strat_params['trailing_stop'] = args.trailing_stop
+    if args.rebalance_interval is not None:
+        strat_params['rebalance_interval'] = args.rebalance_interval
+
+    # 2. Check if Parameter Optimization mode is requested
+    if args.optimize:
+        from vn_backtest.optimizer import ParameterOptimizer
+        
+        # Grid Search for fast_period and slow_period on MACrossover
+        param_grid = {
+            'fast_period': [5, 10, 15, 20],
+            'slow_period': [20, 30, 40, 50]
+        }
+        
+        engine_kwargs = {
+            'buy_fee': args.fee,
+            'sell_fee': args.fee,
+            'sell_tax': args.tax,
+            'settlement_days': args.t_settle,
+            'lot_size': args.lot_size,
+            'execution_at': "open",
+            'restrict_ceiling_buy': True,
+            'restrict_floor_sell': True,
+            'slippage': 0.0,
+            'dynamic_rules': not args.no_dynamic,
+            'advance_interest_rate': 0.12,
+            'auto_close_at_end': True,
+            'allow_odd_lot': args.allow_odd_lot,
+            'max_volume_ratio': args.max_vol_ratio,
+            'adjust_corporate_actions': args.adjust_corp_actions,
+            'force_adjusted': None if args.force_adjusted == "auto" else (args.force_adjusted == "true"),
+            'margin_ratio': args.margin_ratio,
+            'margin_interest_rate': args.margin_interest,
+            'margin_maintenance_ratio': args.margin_maintenance,
+            'strategy_params': strat_params
+        }
+        
+        optimizer = ParameterOptimizer(
+            data=stock_data,
+            strategy_class=MACrossover,
+            param_grid=param_grid,
+            initial_cash=args.cash,
+            exchange=exchanges,
+            benchmark_data=benchmark_data,
+            risk_free_rate=args.rf_rate,
+            engine_kwargs=engine_kwargs,
+            n_jobs=args.n_jobs
+        )
+        
+        optimizer.run_optimization(sort_by="sharpe_ratio", ascending=False)
+        print("Tối ưu hóa tham số hoàn tất.")
+        return
+
     # 2. Setup Backtest Engine
     print("\n[3/4] Đang khởi chạy mô phỏng backtest...")
     engine = BacktestEngine(
@@ -176,9 +242,11 @@ def main():
         allow_odd_lot=args.allow_odd_lot,
         max_volume_ratio=args.max_vol_ratio,
         adjust_corporate_actions=args.adjust_corp_actions,
+        force_adjusted=None if args.force_adjusted == "auto" else (args.force_adjusted == "true"),
         margin_ratio=args.margin_ratio,
         margin_interest_rate=args.margin_interest,
-        margin_maintenance_ratio=args.margin_maintenance
+        margin_maintenance_ratio=args.margin_maintenance,
+        strategy_params=strat_params
     )
     # Inject tickers information
     engine.ticker = ",".join(tickers)

@@ -9,11 +9,19 @@ class Strategy:
     Base class for writing backtesting strategies.
     Inherit from this class and override init() and next() methods.
     """
-    def __init__(self, data: Any, engine: Any):
+    def __init__(self, data: Any, engine: Any, **kwargs):
         self.data = data
         self.engine = engine
         self._indicators = []
         self.current_idx = 0
+        
+        # Risk management parameters
+        self.stop_loss = None
+        self.trailing_stop = None
+        
+        # Set additional parameters as attributes (for optimization or customization)
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     @property
     def current_time(self) -> pd.Timestamp:
@@ -136,7 +144,7 @@ class Strategy:
         """
         pass
 
-    def buy(self, ticker: str, size: float = None) -> None:
+    def buy(self, ticker: str, size: float = None, limit_price: float = None) -> None:
         """
         Place a Buy Order.
         
@@ -146,10 +154,11 @@ class Strategy:
                 - If float between 0.0 and 1.0 (e.g., 0.5): Allocates that percentage of available cash.
                 - If integer > 1 (e.g., 200): Buys that exact number of shares.
                 - If None: Allocates 100% of available cash.
+            limit_price (float, optional): Limit price for the order. If None, it is a Market Order.
         """
-        self.engine.place_buy_order(ticker, size, time=self.current_time)
+        self.engine.place_buy_order(ticker, size, time=self.current_time, limit_price=limit_price)
 
-    def sell(self, ticker: str, size: float = None) -> None:
+    def sell(self, ticker: str, size: float = None, limit_price: float = None) -> None:
         """
         Place a Sell Order.
         
@@ -159,8 +168,9 @@ class Strategy:
                 - If float between 0.0 and 1.0 (e.g., 0.5): Sells that percentage of the position.
                 - If integer > 1: Sells that exact number of shares.
                 - If None: Sells the entire position.
+            limit_price (float, optional): Limit price for the order. If None, it is a Market Order.
         """
-        self.engine.place_sell_order(ticker, size, time=self.current_time)
+        self.engine.place_sell_order(ticker, size, time=self.current_time, limit_price=limit_price)
 
     def order_target_percent(self, ticker: str, target_percent: float) -> None:
         """
@@ -192,6 +202,27 @@ class Strategy:
             else:
                 df = self.data
             func_args = args
+
+        # Redirect indicators from Close to Adj_Close if adjusted price columns are available
+        if 'Adj_Close' in df.columns:
+            import inspect
+            try:
+                sig = inspect.signature(func)
+                if 'column' in sig.parameters:
+                    if 'column' in kwargs:
+                        if kwargs['column'] == 'Close':
+                            kwargs['column'] = 'Adj_Close'
+                    else:
+                        param_names = list(sig.parameters.keys())
+                        col_idx = param_names.index('column') - 1 # skip first arg (data)
+                        if len(func_args) <= col_idx:
+                            kwargs['column'] = 'Adj_Close'
+            except Exception:
+                if 'column' in kwargs:
+                    if kwargs['column'] == 'Close':
+                        kwargs['column'] = 'Adj_Close'
+                elif len(func_args) < 2:
+                    kwargs['column'] = 'Adj_Close'
 
         indicator_series = func(df, *func_args, **kwargs)
         self._indicators.append(indicator_series)

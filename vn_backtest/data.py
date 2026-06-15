@@ -77,13 +77,21 @@ class VNStockDataLoader:
                 'high': 'High',
                 'low': 'Low',
                 'close': 'Close',
-                'volume': 'Volume'
+                'volume': 'Volume',
+                'average': 'Average'
             }
             df.rename(columns=rename_map, inplace=True)
-            df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            
+            cols_to_keep = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+            if 'Average' in df.columns:
+                cols_to_keep.append('Average')
+            df = df[cols_to_keep]
             
             if not is_index:
-                for col in ['Open', 'High', 'Low', 'Close']:
+                cols_to_scale = ['Open', 'High', 'Low', 'Close']
+                if 'Average' in df.columns:
+                    cols_to_scale.append('Average')
+                for col in cols_to_scale:
                     df[col] = df[col] * 1000.0
             
             df.sort_values('Date', inplace=True)
@@ -123,7 +131,7 @@ class VNStockDataLoader:
         symbol = symbol.upper()
         cache_path = self._get_events_cache_path(symbol)
         
-        cols = ['exright_date', 'payout_date', 'value_per_share', 'exercise_ratio', 'listing_date', 'event_name_vi']
+        cols = ['exright_date', 'payout_date', 'value_per_share', 'exercise_ratio', 'listing_date', 'event_name_vi', 'event_title_vi']
         
         # Check cache freshness (24 hours TTL for events)
         is_fresh = False

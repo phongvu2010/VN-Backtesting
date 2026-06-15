@@ -132,13 +132,21 @@ class PerformanceAnalyzer:
                         'fee': t['Fee'] + advance_fee
                     })
                 elif t['Action'] == 'DIVIDEND_STOCK':
-                    # Add stock dividend lot with 0 cost and 0 fee
-                    buy_queues[ticker].append({
-                        'qty': t['Quantity'],
-                        'price': 0.0,
-                        'date': t['Date'],
-                        'fee': 0.0
-                    })
+                    # Adjust the cost basis of all existing lots proportionally instead of adding a 0-cost lot
+                    total_qty_before = sum(lot['qty'] for lot in buy_queues[ticker])
+                    if total_qty_before > 0:
+                        ratio = t['Quantity'] / total_qty_before
+                        for lot in buy_queues[ticker]:
+                            lot['qty'] *= (1.0 + ratio)
+                            lot['price'] /= (1.0 + ratio)
+                    else:
+                        # Fallback for anomaly cases
+                        buy_queues[ticker].append({
+                            'qty': t['Quantity'],
+                            'price': 0.0,
+                            'date': t['Date'],
+                            'fee': 0.0
+                        })
                 elif t['Action'] == 'SELL':
                     sell_qty = t['Quantity']
                     sell_price = t['Price']
@@ -152,7 +160,7 @@ class PerformanceAnalyzer:
                     matched_qty_sum = 0
                     
                     buy_queue = buy_queues[ticker]
-                    while sell_qty > 0 and buy_queue:
+                    while sell_qty > 1e-5 and buy_queue:
                         buy_lot = buy_queue[0]
                         matched_qty = min(sell_qty, buy_lot['qty'])
                         
@@ -171,7 +179,7 @@ class PerformanceAnalyzer:
                         buy_lot['fee'] -= prop_buy_fee
                         buy_lot['qty'] -= matched_qty
                         sell_qty -= matched_qty
-                        if buy_lot['qty'] <= 0:
+                        if buy_lot['qty'] < 1e-5:
                             buy_queue.pop(0)
                             
                     if matched_qty_sum > 0:
@@ -250,16 +258,23 @@ class PerformanceAnalyzer:
                 
             outperformance = total_return - benchmark_return
             
-            # Beta calculation
-            cov = aligned_data['Strategy_Return'].cov(aligned_data['Benchmark_Return'])
-            bench_var = aligned_data['Benchmark_Return'].var()
-            if pd.notna(bench_var) and bench_var > 1e-8:
-                beta = cov / bench_var
+            # OLS Regression for Alpha and Beta using daily excess returns
+            # excess returns = return - risk_free_rate / 252 (daily risk-free rate)
+            daily_rf = risk_free_rate / 252.0
+            excess_strat = aligned_data['Strategy_Return'] - daily_rf
+            excess_bench = aligned_data['Benchmark_Return'] - daily_rf
+            
+            mask = ~np.isnan(excess_bench) & ~np.isnan(excess_strat)
+            eb_clean = excess_bench[mask]
+            es_clean = excess_strat[mask]
+            
+            if len(eb_clean) > 1:
+                # OLS: es_clean = beta * eb_clean + alpha_daily
+                beta, alpha_daily = np.polyfit(eb_clean, es_clean, 1)
+                alpha = alpha_daily * 252.0 # Annualized Alpha
             else:
                 beta = 1.0
-                
-            # Alpha calculation (annualized)
-            alpha = cagr - (risk_free_rate + beta * (benchmark_cagr - risk_free_rate))
+                alpha = 0.0
 
         return {
             'duration_days': duration_days,

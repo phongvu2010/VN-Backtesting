@@ -49,6 +49,34 @@ Các tham số CLI khả dụng:
 * `--fee` & `--tax`: Phí giao dịch mua/bán và thuế bán chứng khoán (mặc định tương ứng: 0.15% và 0.1%).
 * `--no_cache`: Không dùng cache dữ liệu CSV cũ mà tải mới hoàn toàn từ `vnstock`.
 * `--no_dynamic`: Vô hiệu hóa việc áp dụng luật thay đổi động theo dòng lịch sử (chạy cấu hình tĩnh).
+* `--rebalance_interval`: Chu kỳ cơ cấu tỷ trọng danh mục theo số phiên (ví dụ: 20).
+* `--n_jobs`: Số tiến trình chạy song song khi tối ưu hóa (mặc định: -1).
+
+---
+
+## Hướng Dẫn Khởi Chạy Ứng Dụng Web Dashboard
+
+Hệ thống hỗ trợ giao diện Web trực quan (phong cách Glassmorphism Dark Mode) giúp cấu hình tham số, theo dõi log chạy thời gian thực và hiển thị biểu đồ báo cáo Plotly tương tác trực tiếp.
+
+### Các bước khởi chạy:
+
+1. **Kích hoạt virtual environment**:
+   ```bash
+   source .venv/bin/activate
+   ```
+
+2. **Cài đặt thư viện bổ sung (nếu chưa cài)**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Khởi chạy Web Server**:
+   ```bash
+   python web_app.py
+   ```
+
+4. **Truy cập giao diện Web**:
+   Mở trình duyệt và truy cập: **[http://127.0.0.1:5000](http://127.0.0.1:5000)**
 
 ---
 
