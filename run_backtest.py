@@ -38,6 +38,8 @@ def main():
     parser.add_argument("--execution_at", type=str.lower, default="open", choices=["open", "close", "average", "vwap", "hl2", "typical"], help="Mô hình giá khớp lệnh (open, close, average/vwap, hl2, typical)")
     parser.add_argument("--slippage", type=float, default=0.0, help="Tỷ lệ trượt giá cố định (ví dụ: 0.001 cho 0.1%%)")
     parser.add_argument("--market_impact", type=float, default=0.0, help="Hệ số tác động thị trường gây trượt giá động (ví dụ: 0.1)")
+    parser.add_argument("--rights_listing_delay", type=int, default=90, help="Số ngày chờ giải tỏa cổ tức cổ phiếu/quyền mua (mặc định: 90 ngày)")
+    parser.add_argument("--report_name", type=str, default=None, help="Tên file báo cáo HTML đầu ra (ví dụ: report_123.html)")
     
     args = parser.parse_args()
     
@@ -190,7 +192,8 @@ def main():
             'margin_ratio': args.margin_ratio,
             'margin_interest_rate': args.margin_interest,
             'margin_maintenance_ratio': args.margin_maintenance,
-            'strategy_params': strat_params
+            'strategy_params': strat_params,
+            'rights_listing_delay': args.rights_listing_delay
         }
         
         optimizer = ParameterOptimizer(
@@ -209,7 +212,10 @@ def main():
         
         # Generate beautiful HTML Optimization Report
         reporter = ReportGenerator()
-        report_filename = f"report_opt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        if args.report_name:
+            report_filename = args.report_name
+        else:
+            report_filename = f"report_opt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
         report_path = reporter.generate_optimization_report(
             results_df=results_df,
             ticker=",".join(tickers),
@@ -250,7 +256,8 @@ def main():
         margin_ratio=args.margin_ratio,
         margin_interest_rate=args.margin_interest,
         margin_maintenance_ratio=args.margin_maintenance,
-        strategy_params=strat_params
+        strategy_params=strat_params,
+        rights_listing_delay=args.rights_listing_delay
     )
     # Inject tickers information
     engine.ticker = ",".join(tickers)
@@ -302,7 +309,10 @@ def main():
     
     # 5. Generate beautiful HTML Report
     reporter = ReportGenerator()
-    report_filename = f"report_portfolio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    if args.report_name:
+        report_filename = args.report_name
+    else:
+        report_filename = f"report_portfolio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
     
     report_path = reporter.generate_report(
         metrics=metrics,

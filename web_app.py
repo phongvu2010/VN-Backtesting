@@ -2,14 +2,15 @@ import os
 import sys
 import subprocess
 import glob
+import uuid
 from datetime import datetime
 from flask import Flask, jsonify, request, send_from_directory, render_template
 
 app = Flask(__name__, template_folder='templates')
 
-# Track running process globally
-# structure: {"proc": Popen_object, "start_time": datetime, "ticker": str}
-backtest_process = None
+# Track running processes globally
+# structure: task_id -> {"proc": Popen_object, "start_time": datetime, "ticker": str, "report_filename": str, "optimize": bool, "log_file": log_file}
+running_tasks = {}
 
 # Set working directory to the project root
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -85,15 +86,13 @@ def serve_report(filename):
     """Serve the static report HTML files."""
     return send_from_directory(os.path.join(ROOT_DIR, 'reports'), filename)
 
+last_task_id = None
+
 @app.route('/api/run', methods=['POST'])
 def run_backtest():
     """Start the backtest script asynchronously."""
-    global backtest_process
+    global last_task_id
     
-    # Check if a process is already running
-    if backtest_process is not None and backtest_process["proc"].poll() is None:
-        return jsonify({"error": "Một tiến trình Backtest khác đang chạy. Vui lòng đợi."}), 400
-        
     data = request.json or {}
     ticker = data.get('ticker', 'FPT').strip()
     start = data.get('start', '2020-01-01')
@@ -108,6 +107,9 @@ def run_backtest():
     slippage = data.get('slippage')
     market_impact = data.get('market_impact')
     
+    # Generate unique task ID
+    task_id = uuid.uuid4().hex[:12]
+    
     # Determine python execution path in .venv
     if sys.platform == "win32":
         python_path = os.path.join(ROOT_DIR, '.venv', 'Scripts', 'python.exe')
@@ -117,13 +119,26 @@ def run_backtest():
     if not os.path.exists(python_path):
         python_path = "python3" # Fallback if venv is not found
         
-    cmd = [python_path, 'run_backtest.py', '--ticker', ticker, '--start', start, '--end', end, '--cash', str(cash)]
+    # Generate report filename
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    if optimize:
+        report_filename = f"report_opt_{task_id}_{timestamp}.html"
+    else:
+        report_filename = f"report_portfolio_{task_id}_{timestamp}.html"
+        
+    cmd = [
+        python_path, 'run_backtest.py', 
+        '--ticker', ticker, 
+        '--start', start, 
+        '--end', end, 
+        '--cash', str(cash),
+        '--report_name', report_filename
+    ]
     
     if rebalance_interval is not None and str(rebalance_interval).strip() != "":
         cmd.extend(['--rebalance_interval', str(rebalance_interval)])
         
     if stop_loss is not None and str(stop_loss).strip() != "":
-        # Convert e.g. 7% -> 0.07
         try:
             val = float(stop_loss)
             if val > 1.0:
@@ -170,11 +185,12 @@ def run_backtest():
     if optimize:
         cmd.append('--optimize')
         
-    log_file_path = os.path.join(ROOT_DIR, 'reports', 'last_run.log')
+    log_file_path = os.path.join(ROOT_DIR, 'reports', f'run_{task_id}.log')
     
     # Write starting command to log
     with open(log_file_path, 'w', encoding='utf-8') as f:
         f.write(f"=== KHỞI CHẠY TIẾN TRÌNH BACKTEST ===\n")
+        f.write(f"Task ID: {task_id}\n")
         f.write(f"Thời gian: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
         f.write(f"Lệnh thực thi: {' '.join(cmd)}\n")
         f.write(f"=====================================\n\n")
@@ -191,66 +207,74 @@ def run_backtest():
             text=True
         )
         
-        backtest_process = {
+        running_tasks[task_id] = {
             "proc": proc,
             "start_time": datetime.now(),
             "ticker": ticker,
             "optimize": optimize,
+            "report_filename": report_filename,
             "log_file": log_file
         }
         
-        return jsonify({"status": "started", "ticker": ticker})
+        last_task_id = task_id
+        
+        return jsonify({"status": "started", "task_id": task_id, "ticker": ticker})
     except Exception as e:
         log_file.close()
         return jsonify({"error": f"Không thể khởi chạy tiến trình: {e}"}), 500
 
 @app.route('/api/status', methods=['GET'])
-def get_status():
+@app.route('/api/status/<task_id>', methods=['GET'])
+def get_status(task_id=None):
     """Get the running status and return the generated report file if completed."""
-    global backtest_process
-    
-    if backtest_process is None:
+    global last_task_id
+    if task_id is None:
+        task_id = last_task_id
+        
+    if task_id is None or task_id not in running_tasks:
         return jsonify({"status": "idle"})
         
-    proc = backtest_process["proc"]
+    task = running_tasks[task_id]
+    proc = task["proc"]
     poll = proc.poll()
     
     if poll is None:
-        return jsonify({"status": "running", "ticker": backtest_process["ticker"]})
+        return jsonify({"status": "running", "ticker": task["ticker"]})
     
     # Close log file descriptor
-    if "log_file" in backtest_process and backtest_process["log_file"]:
+    if "log_file" in task and task["log_file"]:
         try:
-            backtest_process["log_file"].close()
+            task["log_file"].close()
         except Exception:
             pass
             
     if poll == 0:
-        # Search for the latest report generated
-        reports_path = os.path.join(ROOT_DIR, 'reports', 'report_*.html')
-        files = glob.glob(reports_path)
-        
-        if files:
-            files.sort(key=os.path.getmtime, reverse=True)
-            latest_report = os.path.basename(files[0])
-            # Verify if this report is newer than the process start time
-            mtime = datetime.fromtimestamp(os.path.getmtime(files[0]))
-            if mtime >= backtest_process["start_time"] or len(files) == 1:
-                return jsonify({
-                    "status": "completed", 
-                    "ticker": backtest_process["ticker"], 
-                    "report": latest_report,
-                    "optimize": backtest_process["optimize"]
-                })
+        report_filename = task["report_filename"]
+        report_path = os.path.join(ROOT_DIR, 'reports', report_filename)
+        if os.path.exists(report_path):
+            return jsonify({
+                "status": "completed", 
+                "ticker": task["ticker"], 
+                "report": report_filename,
+                "optimize": task["optimize"]
+            })
                 
-        return jsonify({"status": "completed", "ticker": backtest_process["ticker"], "note": "Không tìm thấy file báo cáo mới sinh ra.", "optimize": backtest_process["optimize"]})
+        return jsonify({"status": "completed", "ticker": task["ticker"], "note": "Không tìm thấy file báo cáo mới sinh ra.", "optimize": task["optimize"]})
     else:
-        return jsonify({"status": "failed", "ticker": backtest_process["ticker"], "error_code": poll})
+        return jsonify({"status": "failed", "ticker": task["ticker"], "error_code": poll})
 
 @app.route('/api/log', methods=['GET'])
-def get_log():
+@app.route('/api/log/<task_id>', methods=['GET'])
+def get_log(task_id=None):
     """Return the current logs of the running or last run backtest."""
-    log_file_path = os.path.join(ROOT_DIR, 'reports', 'last_run.log')
+    global last_task_id
+    if task_id is None:
+        task_id = last_task_id
+        
+    if task_id is None:
+        return "Chưa có tiến trình nào được chạy."
+        
+    log_file_path = os.path.join(ROOT_DIR, 'reports', f'run_{task_id}.log')
     if not os.path.exists(log_file_path):
         return ""
         

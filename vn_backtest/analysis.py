@@ -141,6 +141,12 @@ class PerformanceAnalyzer:
                             lot['price'] /= (1.0 + ratio)
                     else:
                         # Fallback for anomaly cases
+                        import logging
+                        logging.warning(
+                            f"CẢNH BÁO: Nhận cổ tức cổ phiếu cho {ticker} vào ngày {t['Date'].strftime('%d/%m/%Y')} "
+                            f"nhưng hàng đợi mua trống (không nắm giữ cổ phiếu trước ngày chốt quyền). "
+                            f"Điều này có thể do sai lệch dữ liệu lịch sử hoặc giao dịch."
+                        )
                         buy_queues[ticker].append({
                             'qty': t['Quantity'],
                             'price': 0.0,

@@ -734,8 +734,8 @@
                     throw new Error(data.error);
                 }
                 
-                // Start polling logs and status
-                startPolling();
+                // Start polling logs and status using the returned task_id
+                startPolling(data.task_id);
             } catch (err) {
                 alert(`Lỗi: ${err.message}`);
                 stopRunningState("Idle", "var(--text-muted)");
@@ -744,14 +744,15 @@
         }
 
         // Polling function for status & log updates
-        function startPolling() {
+        function startPolling(taskId) {
             if (pollInterval) clearInterval(pollInterval);
             
             // Poll logs every 500ms, status every 1s
             pollInterval = setInterval(async () => {
                 // 1. Fetch latest log
                 try {
-                    const logRes = await fetch('/api/log');
+                    const url = taskId ? `/api/log/${taskId}` : '/api/log';
+                    const logRes = await fetch(url);
                     const text = await logRes.text();
                     const consoleElement = document.getElementById('consoleLog');
                     
@@ -767,7 +768,8 @@
                 
                 // 2. Fetch process status
                 try {
-                    const statusRes = await fetch('/api/status');
+                    const url = taskId ? `/api/status/${taskId}` : '/api/status';
+                    const statusRes = await fetch(url);
                     const statusData = await statusRes.json();
                     
                     if (statusData.status === 'completed') {

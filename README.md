@@ -110,3 +110,21 @@ Chúng tôi đã chạy thử nghiệm thực tế trong giai đoạn **2020/202
 * **Tỷ lệ thắng (Win Rate)**: 44.8%.
 
 Báo cáo tương tác HTML với đầy đủ biểu đồ tài sản và nhật ký lệnh chi tiết được lưu tại thư mục `reports/`.
+
+---
+
+## Lưu ý quan trọng: Phòng tránh Look-ahead Bias khi viết chiến lược
+
+Để đảm bảo kết quả backtest hoàn toàn thực tế và có thể áp dụng ngoài thực tế giao dịch, hệ thống **VN-Backtest** được thiết kế để triệt tiêu hiện tượng **Look-ahead Bias** (nhìn trước tương lai) thông qua mô hình khớp lệnh như sau:
+
+1. **Cơ chế Khớp lệnh Hai Bước:**
+   * Trong phương thức `next()` của chiến lược (được gọi ở cuối mỗi phiên giao dịch $T$), bạn chỉ được đặt lệnh thông qua các hàm như `self.buy()`, `self.sell()` hoặc `self.order_target_percent()`.
+   * Lệnh này **sẽ không được khớp ngay lập tức** tại phiên $T$. Thay vào đó, nó được xếp vào hàng đợi `pending_orders` và chỉ được mang ra khớp ở phiên tiếp theo ($T+1$) với giá khớp được xác định bởi thuộc tính `--execution_at` (mặc định là giá `Open` của ngày $T+1$).
+
+2. **Cách viết Chiến lược An toàn (Tránh Bias):**
+   * Chỉ sử dụng dữ liệu giá lịch sử của phiên hiện tại trở về trước để đưa ra quyết định giao dịch. 
+   * Tránh tuyệt đối việc lấy dữ liệu tương lai để đưa ra tín hiệu cho phiên hiện tại.
+   * Ví dụ:
+     * **ĐÚNG:** So sánh giá đóng cửa hôm nay (`self.close` hoặc `self.get_close(ticker)`) với chỉ báo kỹ thuật của ngày hôm nay để quyết định mua. Lệnh mua sẽ khớp vào giá Mở cửa (Open) ngày mai.
+     * **SAI:** Đọc trước giá Mở cửa hoặc giá Thấp nhất của ngày mai trong khi đang ở phiên `next()` hôm nay để đặt lệnh khớp luôn cùng ngày.
+

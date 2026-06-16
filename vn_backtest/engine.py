@@ -38,6 +38,7 @@ class BacktestEngine:
         ticker: str = None,                   # Optional: Ticker name if data is a single DataFrame
         strategy_params: Dict[str, Any] = None, # Dict of parameters for strategy init
         market_impact_coef: float = 0.0,      # Market impact coefficient for dynamic slippage
+        rights_listing_delay: int = 90,       # Calendar days delay for rights/stock dividend listing
     ):
         # Handle multi-ticker data dict
         if isinstance(data, pd.DataFrame):
@@ -79,6 +80,7 @@ class BacktestEngine:
         self.margin_interest_rate = margin_interest_rate
         self.margin_maintenance_ratio = margin_maintenance_ratio
         self.strategy_params = strategy_params or {}
+        self.rights_listing_delay = rights_listing_delay
         
         # Risk management tracking
         self.position_entry_price = {}
@@ -207,6 +209,30 @@ class BacktestEngine:
             # default fallback
             return float(row['Open'] if exec_mode == 'open' else row['Close'])
 
+    def _get_tick_size(self, price: float, exchange: str, current_time: pd.Timestamp = None) -> float:
+        """Get the tick size for a given price according to exchange rules."""
+        price = float(price)
+        if exchange == "hose":
+            if self.dynamic_rules and current_time is not None and current_time < pd.Timestamp("2016-09-12"):
+                # HOSE rules before 12/09/2016
+                if price < 50000.0:
+                    return 100.0
+                elif price < 100000.0:
+                    return 500.0
+                else:
+                    return 1000.0
+            else:
+                # HOSE rules from 12/09/2016 onwards
+                if price < 10000.0:
+                    return 10.0
+                elif price < 50000.0:
+                    return 50.0
+                else:
+                    return 100.0
+        else:
+            # HNX and UPCOM use 100 VND tick size for all stocks
+            return 100.0
+
     def _round_to_tick(self, price: float, exchange: str, direction: str, current_time: pd.Timestamp = None) -> float:
         """
         Round a price to the nearest tick size according to Vietnam exchange rules.
@@ -215,26 +241,7 @@ class BacktestEngine:
         HOSE uses historical tick sizes if dynamic rules are enabled.
         """
         price = float(price)
-        if exchange == "hose":
-            if self.dynamic_rules and current_time is not None and current_time < pd.Timestamp("2016-09-12"):
-                # HOSE rules before 12/09/2016
-                if price < 50000.0:
-                    tick = 100.0
-                elif price < 100000.0:
-                    tick = 500.0
-                else:
-                    tick = 1000.0
-            else:
-                # HOSE rules from 12/09/2016 onwards
-                if price < 10000.0:
-                    tick = 10.0
-                elif price < 50000.0:
-                    tick = 50.0
-                else:
-                    tick = 100.0
-        else:
-            # HNX and UPCOM use 100 VND tick size for all stocks
-            tick = 100.0
+        tick = self._get_tick_size(price, exchange, current_time)
 
         if direction == "down": # Ceiling
             return (price // tick) * tick
@@ -418,11 +425,29 @@ class BacktestEngine:
                         'Price': payout_val,
                         'Quantity': qty
                     })
+                    
+                    # Adjust risk management prices for cash dividend ex-rights price drop
+                    close_prev = self.data[ticker].iloc[current_idx - 1]['Close'] if current_idx > 0 else payout_val
+                    if close_prev > payout_val:
+                        factor = (close_prev - payout_val) / close_prev
+                        if ticker in self.position_entry_price:
+                            self.position_entry_price[ticker] *= factor
+                        if ticker in self.position_highest_price:
+                            self.position_highest_price[ticker] *= factor
                 
                 # Check for Rights Offering (Quyền mua phát hành thêm)
                 elif 'quyền mua' in str(event_title).lower() or 'quyền mua' in str(event_name).lower():
                     ratio = exercise_ratio if pd.notna(exercise_ratio) else 0.0
                     if ratio > 0:
+                        # Adjust risk management prices for dilution from rights issue ex-rights price drop
+                        close_prev = self.data[ticker].iloc[current_idx - 1]['Close'] if current_idx > 0 else 10000.0
+                        if close_prev > 10000.0:
+                            factor = (close_prev + ratio * 10000.0) / (close_prev * (1.0 + ratio))
+                            if ticker in self.position_entry_price:
+                                self.position_entry_price[ticker] *= factor
+                            if ticker in self.position_highest_price:
+                                self.position_highest_price[ticker] *= factor
+
                         new_shares = int(qty * ratio)
                         if new_shares > 0:
                             # Check if market price is above subscription price (usually 10,000 VND)
@@ -447,23 +472,23 @@ class BacktestEngine:
                                 if can_exercise:
                                     self.cash -= cash_needed
                                     self.available_cash = max(0.0, self.available_cash - cash_needed)
-                                    self.positions[ticker] = self.positions.get(ticker, 0) + new_shares
-                                    
-                                    # Determine unlock date (usually listing date or 45 days)
+                                    # Determine unlock date (usually listing date or self.rights_listing_delay days)
                                     unlock_date = event.get('listing_date')
                                     if pd.isna(unlock_date) or unlock_date is None:
                                         unlock_date = event.get('payout_date')
                                     if pd.isna(unlock_date) or unlock_date is None:
-                                        unlock_date = current_time + pd.Timedelta(days=45)
+                                        unlock_date = current_time + pd.Timedelta(days=self.rights_listing_delay)
                                     else:
                                         unlock_date = pd.to_datetime(unlock_date)
-                                        
-                                    unlock_idx = current_idx + 30
+                                         
+                                    unlock_idx = current_idx + int(self.rights_listing_delay * 5 / 7)
                                     for future_idx in range(current_idx, len(self.dates)):
                                         if self.dates[future_idx] >= unlock_date:
                                             unlock_idx = future_idx
                                             break
                                             
+                                    self.positions[ticker] = self.positions.get(ticker, 0) + new_shares
+                                    
                                     self.settlement_queue.append({
                                         'ticker': ticker,
                                         'quantity': new_shares,
@@ -513,6 +538,13 @@ class BacktestEngine:
                 else:
                     ratio = exercise_ratio if pd.notna(exercise_ratio) else 0.0
                     if ratio > 0:
+                        # Adjust risk management prices for stock dividend ex-rights price drop
+                        factor = 1.0 / (1.0 + ratio)
+                        if ticker in self.position_entry_price:
+                            self.position_entry_price[ticker] *= factor
+                        if ticker in self.position_highest_price:
+                            self.position_highest_price[ticker] *= factor
+
                         new_shares = int(qty * ratio)
                         if new_shares > 0:
                             self.positions[ticker] = self.positions.get(ticker, 0) + new_shares
@@ -522,12 +554,12 @@ class BacktestEngine:
                             if pd.isna(unlock_date) or unlock_date is None:
                                 unlock_date = event.get('payout_date')
                             if pd.isna(unlock_date) or unlock_date is None:
-                                unlock_date = current_time + pd.Timedelta(days=45)
+                                unlock_date = current_time + pd.Timedelta(days=self.rights_listing_delay)
                             else:
                                 unlock_date = pd.to_datetime(unlock_date)
                                 
                             # Map unlock_date to trading day index
-                            unlock_idx = current_idx + 30
+                            unlock_idx = current_idx + int(self.rights_listing_delay * 5 / 7)
                             for future_idx in range(current_idx, len(self.dates)):
                                 if self.dates[future_idx] >= unlock_date:
                                     unlock_idx = future_idx
@@ -725,6 +757,66 @@ class BacktestEngine:
             # 2.5 Process corporate actions today if enabled
             if self.adjust_corporate_actions:
                 self._process_corporate_actions(current_time, idx)
+
+            # 2.6 Auto-liquidation for delisted / last active day stocks
+            if hasattr(self, 'last_active_dates'):
+                for ticker, last_active_date in self.last_active_dates.items():
+                    if current_time.normalize() == last_active_date.normalize():
+                        qty = self.positions.get(ticker, 0)
+                        if qty > 0:
+                            # Force sell at close price of the last active day
+                            ticker_df = self.data[ticker]
+                            close_price = ticker_df.loc[current_time, 'Close']
+                            
+                            trade_value = qty * close_price
+                            fee = trade_value * self.sell_fee
+                            tax = trade_value * self.sell_tax
+                            net_proceeds = trade_value - fee - tax
+                            
+                            # Add cash and remove positions immediately
+                            self.cash += net_proceeds
+                            settle_idx = idx + self.settlement_days
+                            self.cash_settlement_queue.append({
+                                'amount': net_proceeds,
+                                'settle_idx': settle_idx,
+                                'borrowed': 0.0
+                            })
+                            
+                            self.positions[ticker] = 0
+                            self.sellable_shares[ticker] = 0
+                            
+                            # Clean up positions dictionaries
+                            if ticker in self.positions:
+                                del self.positions[ticker]
+                            if ticker in self.sellable_shares:
+                                del self.sellable_shares[ticker]
+                            if ticker in self.position_entry_price:
+                                del self.position_entry_price[ticker]
+                            if ticker in self.position_highest_price:
+                                del self.position_highest_price[ticker]
+                                
+                            self.trades_history.append({
+                                'Date': current_time,
+                                'Ticker': ticker,
+                                'Action': 'SELL',
+                                'Quantity': qty,
+                                'Price': close_price,
+                                'Value': trade_value,
+                                'Fee': fee,
+                                'Tax': tax,
+                                'TotalValue': net_proceeds,
+                                'TimePlaced': current_time,
+                                'Note': 'Auto-liquidated on last active trading day (Delisted)'
+                            })
+                            self.order_logs.append({
+                                'Date': current_time,
+                                'Ticker': ticker,
+                                'Action': 'SELL_FILLED',
+                                'Reason': 'Auto-liquidated on last active trading day (Delisted)',
+                                'Price': close_price,
+                                'Quantity': qty
+                            })
+                            print(f"   [DELIST] Tự động tất toán vị thế {ticker}: Bán {qty} CP tại giá {close_price:,.0f}đ do hủy niêm yết.")
 
             # Đồng bộ hóa sức mua khả dụng tránh bị vượt quá lượng tiền mặt thực tế (trừ trường hợp dùng Margin)
             if self.margin_ratio >= 1.0:
@@ -1020,21 +1112,37 @@ class BacktestEngine:
             # Apply Slippage (only for market orders)
             exec_price = base_price
             if limit_price is None:
-                # Calculate total slippage including market impact
-                total_slippage = self.slippage
+                # Calculate percentage slippage
+                pct_slippage = self.slippage
                 if self.market_impact_coef > 0.0 and 'Volume' in row and row['Volume'] > 0:
                     volume_share = qty / row['Volume']
-                    total_slippage += self.market_impact_coef * (volume_share ** 2)
+                    pct_slippage += self.market_impact_coef * (volume_share ** 2)
                 
-                # Cap total slippage at 5.0% to keep it realistic
-                total_slippage = min(total_slippage, 0.05)
+                # Cap percentage slippage at 5.0% to keep it realistic
+                pct_slippage = min(pct_slippage, 0.05)
                 
                 if action == 'buy':
-                    exec_price = exec_price * (1.0 + total_slippage)
-                    order['applied_slippage'] = total_slippage
+                    exec_price = exec_price * (1.0 + pct_slippage)
                 else:
-                    exec_price = exec_price * (1.0 - total_slippage)
-                    order['applied_slippage'] = total_slippage
+                    exec_price = exec_price * (1.0 - pct_slippage)
+                
+                order['applied_slippage'] = pct_slippage
+                
+                # Add absolute minimum slippage (half tick size for spread)
+                tick_size = self._get_tick_size(base_price, exch, current_time)
+                min_slippage = 0.5 * tick_size
+                
+                if action == 'buy':
+                    exec_price += min_slippage
+                    # Round UP to nearest tick size to buy at or above ask price
+                    exec_price = self._round_to_tick(exec_price, exch, "up", current_time)
+                else:
+                    exec_price -= min_slippage
+                    # Round DOWN to nearest tick size to sell at or below bid price
+                    exec_price = self._round_to_tick(exec_price, exch, "down", current_time)
+            else:
+                # For limit orders, just round to nearest tick to be sure
+                exec_price = self._round_to_tick(exec_price, exch, "nearest", current_time)
 
             # Limit price execution (cannot buy above ceiling or sell below floor)
             if exec_price > ceiling:
@@ -1343,8 +1451,13 @@ class BacktestEngine:
 
     def _reindex_and_fill_data(self):
         """Reindex each ticker's DataFrame to the unified timeline and fill missing values."""
+        self.last_active_dates = {}
         for ticker, df in list(self.data.items()):
             df['Traded'] = 1.0
+            
+            # Keep track of the actual last active trading date in the raw data
+            last_active_date = df.index[-1]
+            self.last_active_dates[ticker] = last_active_date
             
             # Reindex to the global timeline
             df_reindexed = df.reindex(self.dates)
@@ -1363,6 +1476,10 @@ class BacktestEngine:
             
             # Forward fill price columns, but do NOT backward fill (to prevent lookahead/listing bias before debut)
             df_reindexed[actual_price_cols] = df_reindexed[actual_price_cols].ffill()
+            
+            # Set price columns to NaN after the last active date to prevent look-ahead bias and hold pricing
+            df_reindexed.loc[df_reindexed.index > last_active_date, actual_price_cols] = np.nan
+            
             self.data[ticker] = df_reindexed
 
     def _size_pending_orders(self, current_time: pd.Timestamp, current_idx: int):
@@ -1374,6 +1491,17 @@ class BacktestEngine:
         for order in self.pending_orders:
             action = order['action']
             ticker = order['ticker']
+            
+            # Check if this order has already been sized (e.g. deferred from a previous day due to settlement lock)
+            if 'quantity' in order and 'size' not in order and 'target_percent' not in order:
+                # Keep it as is but cap the sell quantity if our total position has changed
+                if action == 'sell':
+                    total_pos = self.positions.get(ticker, 0)
+                    order['quantity'] = min(order['quantity'], total_pos)
+                    if order['quantity'] <= 0:
+                        continue
+                sized_orders.append(order)
+                continue
             
             # Get latest close price of the ticker
             ticker_df = self.data[ticker]
@@ -1416,8 +1544,8 @@ class BacktestEngine:
                 current_qty = self.positions.get(ticker, 0)
                 
                 if target_percent == 0.0:
-                    # Sell all sellable shares
-                    qty = self.sellable_shares.get(ticker, 0)
+                    # Sell all positions (using total position size instead of sellable_shares to support T+2 deferral)
+                    qty = self.positions.get(ticker, 0)
                     action = 'sell'
                 else:
                     target_value = equity * target_percent
@@ -1441,9 +1569,9 @@ class BacktestEngine:
                             qty = int(target_shares // effective_lot_size) * effective_lot_size
                         else:
                             qty = int(target_shares)
-                        # Cannot sell more than sellable shares
-                        max_sellable = self.sellable_shares.get(ticker, 0)
-                        qty = min(qty, max_sellable)
+                        # Cannot sell more than total owned positions
+                        total_pos = self.positions.get(ticker, 0)
+                        qty = min(qty, total_pos)
                         action = 'sell'
                     else:
                         continue # No change needed
@@ -1482,19 +1610,21 @@ class BacktestEngine:
                             qty = int(target_shares)
                             
                 elif action == 'sell':
-                    max_sellable = self.sellable_shares.get(ticker, 0)
+                    # Size against total positions instead of sellable_shares to prevent T+2 locked orders from being discarded.
+                    # The settlement check and deferral will be handled correctly during execution next day in _execute_orders.
+                    total_pos = self.positions.get(ticker, 0)
                     if size is None:
-                        qty = max_sellable
+                        qty = total_pos
                     elif isinstance(size, float) and 0.0 < size <= 1.0:
-                        target_shares = max_sellable * size
+                        target_shares = total_pos * size
                         if effective_lot_size and effective_lot_size > 0:
                             qty = int(target_shares // effective_lot_size) * effective_lot_size
-                            if qty == 0 and target_shares > 0 and target_shares == max_sellable:
-                                qty = max_sellable
+                            if qty == 0 and target_shares > 0 and target_shares == total_pos:
+                                qty = total_pos
                         else:
                             qty = int(target_shares)
                     elif isinstance(size, (int, np.integer)) and size >= 1:
-                        qty = min(int(size), max_sellable)
+                        qty = min(int(size), total_pos)
                     else:
                         continue
             
