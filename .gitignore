@@ -1,6 +1,7 @@
 __pycache__/
 .venv/
 data_cache/
+local_data/
 reports/
 
 .DS_Store
