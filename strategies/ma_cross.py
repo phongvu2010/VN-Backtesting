@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 from typing import Any
-from ..strategy import Strategy, SMA
+from indicators import SMA
+from vn_backtest.strategy import Strategy
 
 class MACrossover(Strategy):
     """

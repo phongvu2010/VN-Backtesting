@@ -8,9 +8,10 @@ class VNStockDataLoader:
     """
     Data loader for fetching and caching Vietnamese stock and index data.
     """
-    def __init__(self, cache_dir: str = "data_cache", local_db_dir: str = "local_data"):
+    def __init__(self, cache_dir: str = "data_cache", local_db_dir: str = "local_data", offline: bool = False):
         self.cache_dir = cache_dir
         self.local_db_dir = local_db_dir
+        self.offline = offline
         self.market = Market()
         os.makedirs(self.cache_dir, exist_ok=True)
         if self.local_db_dir:
@@ -80,6 +81,15 @@ class VNStockDataLoader:
         symbol = symbol.upper()
         cache_path = self._get_cache_path(symbol, is_index)
         
+        # Helper to ensure index is timezone-naive DatetimeIndex
+        def ensure_tz_naive(dataframe: pd.DataFrame) -> pd.DataFrame:
+            if dataframe is not None and not dataframe.empty:
+                if not isinstance(dataframe.index, pd.DatetimeIndex):
+                    dataframe.index = pd.to_datetime(dataframe.index)
+                if dataframe.index.tz is not None:
+                    dataframe.index = dataframe.index.tz_localize(None)
+            return dataframe
+        
         # 1. Check local offline database first
         df_local = None
         if self.local_db_dir and os.path.exists(self.local_db_dir):
@@ -101,7 +111,25 @@ class VNStockDataLoader:
                 except Exception as e:
                     print(f"CẢNH BÁO: Không thể đọc tệp CSV cục bộ {csv_path} ({e})")
 
-        # 2. Check if local database is too old and needs updating
+        # 1.5 Handle offline mode immediately
+        if self.offline:
+            if df_local is not None and not df_local.empty:
+                df_local.to_csv(cache_path, index=True)
+                return ensure_tz_naive(df_local.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)])
+            if os.path.exists(cache_path):
+                try:
+                    df = pd.read_csv(cache_path, parse_dates=['Date'])
+                    df.set_index('Date', inplace=True)
+                    df = ensure_tz_naive(df)
+                    sliced_df = df.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)]
+                    if not sliced_df.empty:
+                        print(f"-> Chế độ Offline: Sử dụng dữ liệu cache cho {symbol}")
+                        return sliced_df
+                except Exception as e:
+                    print(f"CẢNH BÁO: Lỗi đọc cache offline cho {symbol} ({e})")
+            raise RuntimeError(f"Chế độ Offline: Không tìm thấy dữ liệu cho {symbol} tại {self.local_db_dir} hoặc cache.")
+
+        # 2. Check if local database is too old and needs updating (only in online mode)
         if df_local is not None and not df_local.empty:
             last_date = df_local.index[-1]
             days_diff = (datetime.now().date() - last_date.date()).days
@@ -140,13 +168,13 @@ class VNStockDataLoader:
                         print(f"   Cập nhật dữ liệu cho {symbol} thành công. Đã lưu vào bộ nhớ cache.")
                         
                         # Return the sliced requested range
-                        return df_merged.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)]
+                        return ensure_tz_naive(df_merged.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)])
                 except Exception as e:
                     print(f"CẢNH BÁO: Không thể tải bù dữ liệu cho {symbol} ({e}). Tiếp tục chạy với dữ liệu cục bộ.")
             
             # Save local to cache and return sliced range
             df_local.to_csv(cache_path, index=True)
-            return df_local.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)]
+            return ensure_tz_naive(df_local.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)])
 
         # 3. Check cache freshness (12 hours TTL for price data)
         is_fresh = False
@@ -160,6 +188,7 @@ class VNStockDataLoader:
             try:
                 df = pd.read_csv(cache_path, parse_dates=['Date'])
                 df.set_index('Date', inplace=True)
+                df = ensure_tz_naive(df)
                 # Slice the requested date range
                 sliced_df = df.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)]
                 if not sliced_df.empty:
@@ -197,7 +226,7 @@ class VNStockDataLoader:
             
             # Slice the requested date range
             sliced_df = df.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)]
-            return sliced_df
+            return ensure_tz_naive(sliced_df)
             
         except Exception as e:
             # Fallback to existing stale cache if API fails
@@ -206,6 +235,7 @@ class VNStockDataLoader:
                 try:
                     df = pd.read_csv(cache_path, parse_dates=['Date'])
                     df.set_index('Date', inplace=True)
+                    df = ensure_tz_naive(df)
                     sliced_df = df.loc[pd.to_datetime(start_date):pd.to_datetime(end_date)]
                     if not sliced_df.empty:
                         return sliced_df
@@ -226,25 +256,48 @@ class VNStockDataLoader:
         
         cols = ['exright_date', 'payout_date', 'value_per_share', 'exercise_ratio', 'listing_date', 'event_name_vi', 'event_title_vi']
         
+        # Helper to ensure naive timestamps in date columns
+        def ensure_cols_tz_naive(df_to_clean: pd.DataFrame) -> pd.DataFrame:
+            if df_to_clean is not None and not df_to_clean.empty:
+                for col in ['exright_date', 'payout_date', 'listing_date']:
+                    if col in df_to_clean.columns:
+                        df_to_clean[col] = pd.to_datetime(df_to_clean[col])
+                        try:
+                            # Use .dt accessor if it's a series of Datetime
+                            if hasattr(df_to_clean[col], 'dt'):
+                                df_to_clean[col] = df_to_clean[col].dt.tz_localize(None)
+                            else:
+                                df_to_clean[col] = df_to_clean[col].tz_localize(None)
+                        except Exception:
+                            pass
+            return df_to_clean
+
         # 1. Check local offline database first
         df_local = None
         if self.local_db_dir and os.path.exists(self.local_db_dir):
             local_event_path = os.path.join(self.local_db_dir, f"events_{symbol}.csv")
             if os.path.exists(local_event_path):
                 try:
-                    df_local = pd.read_csv(local_event_path, parse_dates=['exright_date', 'payout_date', 'listing_date'])
-                    for col in ['exright_date', 'payout_date', 'listing_date']:
-                        if col in df_local.columns:
-                            df_local[col] = pd.to_datetime(df_local[col])
-                            try:
-                                df_local[col] = df_local[col].dt.tz_localize(None)
-                            except Exception:
-                                pass
+                    df_raw = pd.read_csv(local_event_path, parse_dates=['exright_date', 'payout_date', 'listing_date'])
+                    df_local = ensure_cols_tz_naive(df_raw)
                     print(f"-> Đã tìm thấy tệp sự kiện cục bộ: {local_event_path}")
                 except Exception as e:
                     print(f"CẢNH BÁO: Không thể đọc tệp sự kiện cục bộ {local_event_path} ({e})")
 
-        # 2. Check cache freshness (24 hours TTL for events)
+        # 1.5 Handle offline mode immediately
+        if self.offline:
+            if df_local is not None and not df_local.empty:
+                df_local.to_csv(cache_path, index=False)
+                return df_local
+            if os.path.exists(cache_path):
+                try:
+                    df = pd.read_csv(cache_path, parse_dates=['exright_date', 'payout_date', 'listing_date'])
+                    return ensure_cols_tz_naive(df)
+                except Exception:
+                    pass
+            return pd.DataFrame(columns=cols)
+
+        # 2. Check cache freshness (24 hours TTL for events, only in online mode)
         is_fresh = False
         if os.path.exists(cache_path):
             mtime = os.path.getmtime(cache_path)
@@ -255,7 +308,7 @@ class VNStockDataLoader:
         if use_cache and is_fresh:
             try:
                 df = pd.read_csv(cache_path, parse_dates=['exright_date', 'payout_date', 'listing_date'])
-                return df
+                return ensure_cols_tz_naive(df)
             except Exception as e:
                 print(f"CẢNH BÁO: Lỗi đọc cache sự kiện cho {symbol} ({e}). Sẽ tải mới.")
                 
@@ -283,13 +336,7 @@ class VNStockDataLoader:
                     df[col] = None
                     
             df = df[cols].copy()
-            
-            for col in ['exright_date', 'payout_date', 'listing_date']:
-                df[col] = pd.to_datetime(df[col])
-                try:
-                    df[col] = df[col].dt.tz_localize(None)
-                except Exception:
-                    pass
+            df = ensure_cols_tz_naive(df)
                 
             # Save to cache
             df.to_csv(cache_path, index=False)
@@ -319,7 +366,7 @@ class VNStockDataLoader:
             if os.path.exists(cache_path):
                 try:
                     df = pd.read_csv(cache_path, parse_dates=['exright_date', 'payout_date', 'listing_date'])
-                    return df
+                    return ensure_cols_tz_naive(df)
                 except Exception:
                     pass
             return pd.DataFrame(columns=cols)
@@ -343,6 +390,21 @@ class VNStockDataLoader:
             except Exception:
                 pass
                 
+        # Handle offline mode immediately
+        if self.offline:
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+                except Exception:
+                    pass
+            return {
+                'FPT': 'hose', 'HPG': 'hose', 'VNM': 'hose', 'VIC': 'hose', 'VHM': 'hose', 'TCB': 'hose',
+                'MWG': 'hose', 'SSI': 'hose', 'VND': 'hose', 'VCB': 'hose', 'STB': 'hose', 'MBB': 'hose',
+                'IDC': 'hnx', 'PVS': 'hnx', 'SHS': 'hnx', 'MBS': 'hnx', 'CEO': 'hnx', 'HUT': 'hnx',
+                'BSR': 'upcom', 'ACV': 'upcom', 'VEA': 'upcom', 'VGI': 'upcom', 'QNS': 'upcom', 'LTG': 'upcom'
+            }
+
         if use_cache and is_fresh:
             try:
                 with open(cache_path, 'r', encoding='utf-8') as f:
@@ -357,34 +419,33 @@ class VNStockDataLoader:
             try:
                 from vnstock import Listing
                 l = Listing(source=source)
-                df_symbols = l.symbols_by_exchange('HOSE')
+                
+                # Call symbols_by_exchange once with correct arguments per source
+                if source == 'VCI':
+                    df_symbols = l.symbols_by_exchange(lang='vi')
+                else:
+                    df_symbols = l.symbols_by_exchange(get_all=True)
+                    
                 if df_symbols is not None and not df_symbols.empty and 'symbol' in df_symbols.columns and 'exchange' in df_symbols.columns:
                     df_symbols = df_symbols.dropna(subset=['symbol', 'exchange'])
                     for _, row in df_symbols.iterrows():
                         symbol = str(row['symbol']).upper()
-                        exch = str(row['exchange']).lower()
-                        if exch == 'comup':
-                            exch = 'upcom'
-                        elif exch == 'xhnf':
+                        exch = str(row['exchange']).lower().strip()
+                        
+                        if exch in ['hose', 'hsx']:
+                            exch = 'hose'
+                        elif exch in ['hnx', 'xhnf']:
                             exch = 'hnx'
+                        elif exch in ['upcom', 'comup']:
+                            exch = 'upcom'
+                        else:
+                            continue
                         exchange_map[symbol] = exch
-                    
-                    # Also fetch other exchanges just to be sure
-                    for exch_name in ['HNX', 'UPCOM']:
-                        try:
-                            df_ex = l.symbols_by_exchange(exch_name)
-                            if df_ex is not None and not df_ex.empty:
-                                for _, row in df_ex.iterrows():
-                                    symbol = str(row['symbol']).upper()
-                                    exch = exch_name.lower()
-                                    exchange_map[symbol] = exch
-                        except Exception:
-                            pass
-                            
+                        
                     if exchange_map:
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"CẢNH BÁO: Lỗi lấy danh sách sàn từ nguồn {source}: {e}")
                 
         # If successfully fetched, write to cache
         if exchange_map:

@@ -106,6 +106,11 @@ def run_backtest():
     execution_at = data.get('execution_at', 'open').strip()
     slippage = data.get('slippage')
     market_impact = data.get('market_impact')
+    adjust_corp_actions = data.get('adjust_corp_actions', False)
+    benchmark = data.get('benchmark', 'VNINDEX').strip()
+    force_adjusted = data.get('force_adjusted', 'auto').strip().lower()
+    offline = data.get('offline', False)
+    dividend_tax = data.get('dividend_tax')
     
     # Generate unique task ID
     task_id = uuid.uuid4().hex[:12]
@@ -132,8 +137,12 @@ def run_backtest():
         '--start', start, 
         '--end', end, 
         '--cash', str(cash),
-        '--report_name', report_filename
+        '--report_name', report_filename,
+        '--benchmark', benchmark
     ]
+    
+    if force_adjusted in ['auto', 'true', 'false']:
+        cmd.extend(['--force_adjusted', force_adjusted])
     
     if rebalance_interval is not None and str(rebalance_interval).strip() != "":
         cmd.extend(['--rebalance_interval', str(rebalance_interval)])
@@ -184,6 +193,21 @@ def run_backtest():
             
     if optimize:
         cmd.append('--optimize')
+        
+    if adjust_corp_actions:
+        cmd.append('--adjust_corp_actions')
+        
+    if offline:
+        cmd.append('--offline')
+        
+    if dividend_tax is not None and str(dividend_tax).strip() != "":
+        try:
+            val = float(dividend_tax)
+            if val > 1.0:
+                val = val / 100.0
+            cmd.extend(['--dividend_tax', str(val)])
+        except ValueError:
+            pass
         
     log_file_path = os.path.join(ROOT_DIR, 'reports', f'run_{task_id}.log')
     

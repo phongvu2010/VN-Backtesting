@@ -102,10 +102,10 @@ class PerformanceAnalyzer:
         avg_hold_days = 0.0
 
         if total_trades > 0:
-            # Filter for trade matching (BUY, SELL, and DIVIDEND_STOCK)
+            # Filter for trade matching (BUY, SELL, DIVIDEND_STOCK, and DIVIDEND_CASH)
             matching_trades = pd.DataFrame(columns=trades.columns)
             if not strategy_trades.empty:
-                matching_trades = strategy_trades[strategy_trades['Action'].isin(['BUY', 'SELL', 'DIVIDEND_STOCK'])]
+                matching_trades = strategy_trades[strategy_trades['Action'].isin(['BUY', 'SELL', 'DIVIDEND_STOCK', 'DIVIDEND_CASH'])]
             
             # We pair BUYs and SELLs to calculate individual trade profits.
             # In simple portfolio trading, a trade starts with a BUY and ends with a SELL.
@@ -153,6 +153,23 @@ class PerformanceAnalyzer:
                             'date': t['Date'],
                             'fee': 0.0
                         })
+                elif t['Action'] == 'DIVIDEND_CASH':
+                    # Distribute cash dividend to active lots or completed trades
+                    net_amount = t['TotalValue']
+                    total_qty = sum(lot['qty'] for lot in buy_queues[ticker])
+                    if total_qty > 0:
+                        d = net_amount / total_qty
+                        for lot in buy_queues[ticker]:
+                            # Reduce cost basis of active lots by the net dividend per share
+                            lot['price'] -= d
+                    else:
+                        # Find recently completed trades for this ticker
+                        ticker_completed = [tc for tc in completed_trades if tc['ticker'] == ticker]
+                        if ticker_completed:
+                            last_trade = ticker_completed[-1]
+                            last_trade['profit'] += net_amount
+                            if 'buy_cost' in last_trade and last_trade['buy_cost'] > 0:
+                                last_trade['return'] = last_trade['profit'] / last_trade['buy_cost']
                 elif t['Action'] == 'SELL':
                     sell_qty = t['Quantity']
                     sell_price = t['Price']
@@ -203,7 +220,8 @@ class PerformanceAnalyzer:
                             'ticker': ticker,
                             'profit': trade_profit,
                             'return': trade_return,
-                            'hold_days': avg_hold
+                            'hold_days': avg_hold,
+                            'buy_cost': total_buy_cost
                         })
 
             # Calculate stats from completed trades

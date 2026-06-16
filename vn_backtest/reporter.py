@@ -18,7 +18,7 @@ class ReportGenerator:
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def _generate_plotly_html(self, equity_df: pd.DataFrame, trades_df: pd.DataFrame, stock_df: Union[pd.DataFrame, Dict[str, pd.DataFrame]], benchmark_df: pd.DataFrame = None) -> str:
+    def _generate_plotly_html(self, equity_df: pd.DataFrame, trades_df: pd.DataFrame, stock_df: Union[pd.DataFrame, Dict[str, pd.DataFrame]], benchmark_df: pd.DataFrame = None, benchmark_symbol: str = "VNINDEX") -> str:
         """Create the interactive Plotly figures and return their HTML snippets."""
         # 1. Chart 1: Equity Curve vs Benchmark (Normalized to 100)
         fig_equity = go.Figure()
@@ -46,7 +46,7 @@ class ReportGenerator:
             fig_equity.add_trace(go.Scatter(
                 x=bench_normalized.index,
                 y=bench_normalized,
-                name='Benchmark (VN-Index)',
+                name=f'Benchmark ({benchmark_symbol})',
                 line=dict(color='#ff9900', width=2, dash='dash')
             ))
             
@@ -243,7 +243,8 @@ class ReportGenerator:
         ticker: str,
         strategy_name: str,
         benchmark_data: pd.DataFrame = None,
-        filename: str = "backtest_report.html"
+        filename: str = "backtest_report.html",
+        benchmark_symbol: str = "VNINDEX"
     ) -> str:
         """
         Generate the beautiful, fully-styled HTML report.
@@ -253,7 +254,7 @@ class ReportGenerator:
         """
         # Generate chart HTML snippets
         equity_chart, dd_chart, signals_chart = self._generate_plotly_html(
-            equity_curve, trades, stock_data, benchmark_data
+            equity_curve, trades, stock_data, benchmark_data, benchmark_symbol
         )
         
         # Prepare HTML template variables
@@ -289,7 +290,8 @@ class ReportGenerator:
             total_trades_count=len(trades_list),
             equity_chart=equity_chart,
             dd_chart=dd_chart,
-            signals_chart=signals_chart
+            signals_chart=signals_chart,
+            benchmark_symbol=benchmark_symbol
         )
         
         output_path = os.path.join(self.output_dir, filename)
@@ -701,6 +703,14 @@ class ReportGenerator:
             </div>
         </header>
 
+        <!-- Survival Bias Disclaimer -->
+        <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 12px; padding: 0.75rem 1.25rem; margin-bottom: 2rem; display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; color: #fef08a;">
+            <svg style="width: 16px; height: 16px; flex-shrink: 0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg>
+            <div>
+                <strong>Cảnh báo dữ liệu (Survival Bias):</strong> Kết quả backtest dựa trên các mã cổ phiếu hiện đang hoạt động trực tuyến. Để kiểm thử các cổ phiếu đã hủy niêm yết (như ROS, FLC), vui lòng đặt tệp dữ liệu vào thư mục <code>local_data/</code>.
+            </div>
+        </div>
+
         <!-- DASHBOARD METRICS -->
         <div class="grid-metrics">
             <!-- Total Return -->
@@ -709,7 +719,7 @@ class ReportGenerator:
                 <div class="metric-value {% if metrics.total_return >= 0 %}val-positive{% else %}val-negative{% endif %}">
                     {% if metrics.total_return >= 0 %}+{% endif %}{{ (metrics.total_return * 100) | round(2) }}%
                 </div>
-                <div class="metric-subtext">Benchmark VN-Index: {{ (metrics.benchmark_return * 100) | round(2) }}%</div>
+                <div class="metric-subtext">Benchmark {{ benchmark_symbol | default('VNINDEX') }}: {{ (metrics.benchmark_return * 100) | round(2) }}%</div>
             </div>
             
             <!-- CAGR -->

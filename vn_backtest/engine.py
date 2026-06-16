@@ -14,6 +14,7 @@ class BacktestEngine:
         self,
         data: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
         strategy_class: Type[Strategy],
+        corporate_actions: Dict[str, pd.DataFrame] = None,
         initial_cash: float = 100_000_000.0,  # 100M VND default
         buy_fee: float = 0.0015,              # 0.15% brokerage fee
         sell_fee: float = 0.0015,             # 0.15% brokerage fee
@@ -39,6 +40,7 @@ class BacktestEngine:
         strategy_params: Dict[str, Any] = None, # Dict of parameters for strategy init
         market_impact_coef: float = 0.0,      # Market impact coefficient for dynamic slippage
         rights_listing_delay: int = 90,       # Calendar days delay for rights/stock dividend listing
+        dividend_tax_rate: float = 0.05,      # 5% dividend tax rate in VN
     ):
         # Handle multi-ticker data dict
         if isinstance(data, pd.DataFrame):
@@ -57,6 +59,7 @@ class BacktestEngine:
         else:
             raise ValueError("Data must be a pandas DataFrame or a dict of DataFrames")
 
+        self.corporate_actions = corporate_actions or {}
         self.strategy_class = strategy_class
         self.initial_cash = initial_cash
         self.buy_fee = buy_fee
@@ -81,6 +84,8 @@ class BacktestEngine:
         self.margin_maintenance_ratio = margin_maintenance_ratio
         self.strategy_params = strategy_params or {}
         self.rights_listing_delay = rights_listing_delay
+        self.dividend_tax_rate = dividend_tax_rate
+        self.dividend_shares = {}
         
         # Risk management tracking
         self.position_entry_price = {}
@@ -106,13 +111,7 @@ class BacktestEngine:
         self.dates = sorted(list(all_dates))
 
         # Fetch corporate actions for all tickers if enabled
-        self.corporate_actions = {}
-        if self.adjust_corporate_actions:
-            from .data import VNStockDataLoader
-            loader = VNStockDataLoader()
-            for ticker in self.data:
-                print(f"-> Đang tải lịch sử cổ tức/chia tách cho {ticker}...")
-                self.corporate_actions[ticker] = loader.fetch_corporate_actions(ticker, use_cache=True)
+        self.corporate_actions = corporate_actions or {}
 
         # Track pending cash dividends: list of dicts {'amount': float, 'payout_date': datetime, 'ticker': str}
         self.pending_dividends: List[Dict[str, Any]] = []
@@ -156,6 +155,13 @@ class BacktestEngine:
 
         # Calculate adjusted price columns
         self._calculate_adjusted_prices()
+
+        # Identify first listing dates before reindexing
+        self.raw_listing_dates = {}
+        for ticker, df in self.data.items():
+            valid_df = df.dropna(subset=['Close'])
+            if not valid_df.empty:
+                self.raw_listing_dates[ticker] = valid_df.index[0]
 
         # Reindex and fill data to prevent multi-ticker timeline alignment issues
         self._reindex_and_fill_data()
@@ -293,15 +299,65 @@ class BacktestEngine:
             return current_time >= pd.Timestamp("2022-09-12")
         return True
 
-    def _get_price_limit(self, ticker: str) -> float:
-        """Get the daily price limit percentage for a stock."""
+    def _get_price_limit(self, ticker: str, current_time: pd.Timestamp) -> float:
+        """Get the daily price limit percentage for a stock based on date and listing status."""
         exch = self.exchanges.get(ticker, "hose")
+        
+        # Check if today is the listing day
+        is_listing_day = False
+        if hasattr(self, 'raw_listing_dates') and ticker in self.raw_listing_dates:
+            if current_time.normalize() == self.raw_listing_dates[ticker].normalize():
+                is_listing_day = True
+                
+        if is_listing_day:
+            if exch == "hose":
+                return 0.20
+            elif exch == "hnx":
+                return 0.30
+            elif exch == "upcom":
+                return 0.40
+            return 0.0
+
+        # Normal trading day - historical limits
         if exch == "hose":
-            return 0.07
+            if current_time < pd.Timestamp("2000-08-24"):
+                return 0.02
+            elif current_time < pd.Timestamp("2001-06-13"):
+                return 0.05
+            elif current_time < pd.Timestamp("2002-08-01"):
+                return 0.02
+            elif current_time < pd.Timestamp("2003-01-02"):
+                return 0.03
+            elif current_time < pd.Timestamp("2008-03-27"):
+                return 0.05
+            elif current_time < pd.Timestamp("2008-04-07"):
+                return 0.01
+            elif current_time < pd.Timestamp("2008-06-19"):
+                return 0.02
+            elif current_time < pd.Timestamp("2008-08-18"):
+                return 0.03
+            elif current_time < pd.Timestamp("2013-01-15"):
+                return 0.05
+            else:
+                return 0.07
         elif exch == "hnx":
-            return 0.10
+            if current_time < pd.Timestamp("2008-03-27"):
+                return 0.10
+            elif current_time < pd.Timestamp("2008-04-07"):
+                return 0.02
+            elif current_time < pd.Timestamp("2008-06-19"):
+                return 0.03
+            elif current_time < pd.Timestamp("2008-08-18"):
+                return 0.05
+            elif current_time < pd.Timestamp("2013-01-15"):
+                return 0.07
+            else:
+                return 0.10
         elif exch == "upcom":
-            return 0.15
+            if current_time < pd.Timestamp("2015-07-01"):
+                return 0.10
+            else:
+                return 0.15
         return 0.0
 
     def _process_settlements(self, current_idx: int):
@@ -335,11 +391,12 @@ class BacktestEngine:
         # 1. Check pending cash dividends payout
         active_pending = []
         for item in self.pending_dividends:
-            if current_time.normalize() >= item['payout_date'].normalize():
+            payout_dt = item['payout_date']
+            if payout_dt.tz is not None:
+                payout_dt = payout_dt.tz_localize(None)
+            if current_time.normalize() >= payout_dt.normalize():
                 amount = item['amount']
-                # Apply 5% personal income tax (TNCN) for cash dividends in Vietnam
-                dividend_tax_rate = 0.05
-                tax = amount * dividend_tax_rate
+                tax = amount * self.dividend_tax_rate
                 net_amount = amount - tax
                 
                 self.cash += net_amount
@@ -357,13 +414,13 @@ class BacktestEngine:
                     'Tax': tax,
                     'TotalValue': net_amount,
                     'TimePlaced': current_time,
-                    'Note': f"Nhận cổ tức tiền mặt cho {item['ticker']} (Tổng: {amount:,.0f} VND, Thuế 5%: {tax:,.0f} VND, Thực nhận: {net_amount:,.0f} VND)"
+                    'Note': f"Nhận cổ tức tiền mặt cho {item['ticker']} (Tổng: {amount:,.0f} VND, Thuế {self.dividend_tax_rate*100:.1f}%: {tax:,.0f} VND, Thực nhận: {net_amount:,.0f} VND)"
                 })
                 self.order_logs.append({
                     'Date': current_time,
                     'Ticker': item['ticker'],
                     'Action': 'DIVIDEND_PAID',
-                    'Reason': f"Nhận cổ tức tiền mặt ({amount:,.0f}đ, sau thuế 5%: {net_amount:,.0f}đ)",
+                    'Reason': f"Nhận cổ tức tiền mặt ({amount:,.0f}đ, sau thuế {self.dividend_tax_rate*100:.1f}%: {net_amount:,.0f}đ)",
                     'Price': 0.0,
                     'Quantity': 0
                 })
@@ -378,6 +435,8 @@ class BacktestEngine:
                 continue
                 
             # Filter events on this day (normalized to ignore time component)
+            if actions_df['exright_date'].dt.tz is not None:
+                actions_df['exright_date'] = actions_df['exright_date'].dt.tz_localize(None)
             events_today = actions_df[actions_df['exright_date'].dt.normalize() == current_time.normalize()]
             for _, event in events_today.iterrows():
                 qty = self.positions.get(ticker, 0)
@@ -410,6 +469,8 @@ class BacktestEngine:
                         payout_date = current_time + pd.Timedelta(days=15)
                     else:
                         payout_date = pd.to_datetime(payout_date)
+                        if payout_date.tz is not None:
+                            payout_date = payout_date.tz_localize(None)
                         
                     self.pending_dividends.append({
                         'amount': dividend_cash,
@@ -470,9 +531,7 @@ class BacktestEngine:
                                         can_exercise = False
                                         
                                 if can_exercise:
-                                    self.cash -= cash_needed
-                                    self.available_cash = max(0.0, self.available_cash - cash_needed)
-                                    # Determine unlock date (usually listing date or self.rights_listing_delay days)
+                                                                     # Determine unlock date (usually listing date or self.rights_listing_delay days)
                                     unlock_date = event.get('listing_date')
                                     if pd.isna(unlock_date) or unlock_date is None:
                                         unlock_date = event.get('payout_date')
@@ -480,10 +539,15 @@ class BacktestEngine:
                                         unlock_date = current_time + pd.Timedelta(days=self.rights_listing_delay)
                                     else:
                                         unlock_date = pd.to_datetime(unlock_date)
+                                        if unlock_date.tz is not None:
+                                            unlock_date = unlock_date.tz_localize(None)
                                          
                                     unlock_idx = current_idx + int(self.rights_listing_delay * 5 / 7)
                                     for future_idx in range(current_idx, len(self.dates)):
-                                        if self.dates[future_idx] >= unlock_date:
+                                        target_dt = self.dates[future_idx]
+                                        if target_dt.tz is not None:
+                                            target_dt = target_dt.tz_localize(None)
+                                        if target_dt >= unlock_date:
                                             unlock_idx = future_idx
                                             break
                                             
@@ -544,10 +608,11 @@ class BacktestEngine:
                             self.position_entry_price[ticker] *= factor
                         if ticker in self.position_highest_price:
                             self.position_highest_price[ticker] *= factor
-
+ 
                         new_shares = int(qty * ratio)
                         if new_shares > 0:
                             self.positions[ticker] = self.positions.get(ticker, 0) + new_shares
+                            self.dividend_shares[ticker] = self.dividend_shares.get(ticker, 0) + new_shares
                             
                             # Determine unlock date
                             unlock_date = event.get('listing_date')
@@ -557,11 +622,16 @@ class BacktestEngine:
                                 unlock_date = current_time + pd.Timedelta(days=self.rights_listing_delay)
                             else:
                                 unlock_date = pd.to_datetime(unlock_date)
+                                if unlock_date.tz is not None:
+                                    unlock_date = unlock_date.tz_localize(None)
                                 
                             # Map unlock_date to trading day index
                             unlock_idx = current_idx + int(self.rights_listing_delay * 5 / 7)
                             for future_idx in range(current_idx, len(self.dates)):
-                                if self.dates[future_idx] >= unlock_date:
+                                target_dt = self.dates[future_idx]
+                                if target_dt.tz is not None:
+                                    target_dt = target_dt.tz_localize(None)
+                                if target_dt >= unlock_date:
                                     unlock_idx = future_idx
                                     break
                                     
@@ -609,12 +679,15 @@ class BacktestEngine:
     def _detect_if_adjusted(self) -> bool:
         """
         Detect if the input data is already adjusted for splits and dividends.
-        We do this by checking historical stock splits/dividends and seeing if the
-        expected price drop is present in the data.
+        We check all historical stock splits/dividends and count how many
+        expected price drops are present.
         """
         if not self.adjust_corporate_actions:
             return True
             
+        unadjusted_count = 0
+        adjusted_count = 0
+        
         for ticker, df in self.data.items():
             events = self.corporate_actions.get(ticker)
             if events is None or events.empty:
@@ -623,6 +696,7 @@ class BacktestEngine:
             # Find stock dividends / splits with a significant ratio (> 0.05)
             splits = events[events['exercise_ratio'] > 0.05]
             df_dates_normalized = df.index.normalize()
+            
             for _, event in splits.iterrows():
                 if pd.isna(event['exright_date']):
                     continue
@@ -635,10 +709,20 @@ class BacktestEngine:
                         ratio = close_ex / close_prev
                         expected_ratio = 1.0 / (1.0 + event['exercise_ratio'])
                         
-                        # If the actual price ratio is close to expected_ratio (within 4%),
-                        # then the data is unadjusted.
-                        if abs(ratio - expected_ratio) < 0.04:
-                            return False
+                        # Price ratio matches expected price drop (unadjusted)
+                        # We allow a wider tolerance of 12% to avoid noise from normal price moves on ex-date
+                        if abs(ratio - expected_ratio) < 0.12:
+                            unadjusted_count += 1
+                        # Price ratio is close to 1.0 (adjusted, meaning no drop)
+                        elif abs(ratio - 1.0) < 0.05:
+                            adjusted_count += 1
+                            
+        # If we detected more unadjusted events than adjusted, it's unadjusted
+        if unadjusted_count > 0 or adjusted_count > 0:
+            print(f"-> Phân tích dữ liệu: phát hiện {unadjusted_count} sự kiện CHƯA điều chỉnh và {adjusted_count} sự kiện ĐÃ điều chỉnh.")
+            return adjusted_count >= unadjusted_count
+            
+        # Default to True if no events found
         return True
 
     def _calculate_adjusted_prices(self):
@@ -771,6 +855,16 @@ class BacktestEngine:
                             trade_value = qty * close_price
                             fee = trade_value * self.sell_fee
                             tax = trade_value * self.sell_tax
+                            
+                            # Apply 5% personal income tax (TNCN) on selling stock dividends under Decree 126
+                            div_tax = 0.0
+                            div_qty = self.dividend_shares.get(ticker, 0)
+                            sold_from_div = min(qty, div_qty)
+                            if sold_from_div > 0:
+                                self.dividend_shares[ticker] = div_qty - sold_from_div
+                                div_tax = sold_from_div * min(close_price, 10000.0) * self.dividend_tax_rate
+                                tax += div_tax
+                                
                             net_proceeds = trade_value - fee - tax
                             
                             # Add cash and remove positions immediately
@@ -794,6 +888,8 @@ class BacktestEngine:
                                 del self.position_entry_price[ticker]
                             if ticker in self.position_highest_price:
                                 del self.position_highest_price[ticker]
+                            if ticker in self.dividend_shares:
+                                del self.dividend_shares[ticker]
                                 
                             self.trades_history.append({
                                 'Date': current_time,
@@ -965,6 +1061,16 @@ class BacktestEngine:
                 trade_value = qty * close_price
                 fee = trade_value * self.sell_fee
                 tax = trade_value * self.sell_tax
+                
+                # Apply 5% personal income tax (TNCN) on selling stock dividends under Decree 126
+                div_tax = 0.0
+                div_qty = self.dividend_shares.get(ticker, 0)
+                sold_from_div = min(qty, div_qty)
+                if sold_from_div > 0:
+                    self.dividend_shares[ticker] = div_qty - sold_from_div
+                    div_tax = sold_from_div * min(close_price, 10000.0) * self.dividend_tax_rate
+                    tax += div_tax
+                    
                 net_proceeds = trade_value - fee - tax
                 
                 # Settle cash immediately since it's the end of backtest
@@ -973,6 +1079,8 @@ class BacktestEngine:
                 
                 self.positions[ticker] = 0
                 self.sellable_shares[ticker] = 0
+                if ticker in self.dividend_shares:
+                    del self.dividend_shares[ticker]
                 
                 trade_record = {
                     'Date': last_date,
@@ -1056,9 +1164,19 @@ class BacktestEngine:
                 continue
                 
             prev_close = prev_closes.get(ticker)
+            
+            # Check if today is the listing day
+            is_listing_day = False
+            if hasattr(self, 'raw_listing_dates') and ticker in self.raw_listing_dates:
+                if current_time.normalize() == self.raw_listing_dates[ticker].normalize():
+                    is_listing_day = True
+            
+            if is_listing_day:
+                prev_close = float(row['Open'])  # Use Open price as reference on listing day
+                
             exch = self.exchanges.get(ticker, "hose")
             lot_size = self._get_lot_size(ticker, current_time)
-            price_limit = self._get_price_limit(ticker)
+            price_limit = self._get_price_limit(ticker, current_time)
             
             # Determine dynamic lot size based on odd lot permission
             effective_lot_size = 1 if self._is_odd_lot_allowed(ticker, current_time) else lot_size
@@ -1152,6 +1270,7 @@ class BacktestEngine:
 
             # --- PROCESS BUY ORDER ---
             if action == 'buy':
+                original_qty = qty
                 # Apply volume limit constraint if specified
                 if self.max_volume_ratio is not None and 'Volume' in row:
                     max_qty = int(row['Volume'] * self.max_volume_ratio)
@@ -1160,16 +1279,37 @@ class BacktestEngine:
                     if qty > max_qty:
                         qty = max_qty
 
+                deferred_qty = original_qty - qty
+
                 if qty <= 0:
+                    # Defer the whole buy order to the next day
+                    self.pending_orders.append(order)
                     self.order_logs.append({
                         'Date': current_time,
                         'Ticker': ticker,
-                        'Action': 'BUY_CANCELLED',
-                        'Reason': 'Target quantity scaled to 0 due to volume limits',
+                        'Action': 'BUY_DEFERRED',
+                        'Reason': f'Target quantity scaled to 0 due to volume limits (deferred {original_qty} shares)',
                         'Price': exec_price,
-                        'Quantity': 0
+                        'Quantity': original_qty
                     })
                     continue
+
+                if deferred_qty > 0:
+                    self.pending_orders.append({
+                        'action': 'buy',
+                        'ticker': ticker,
+                        'quantity': deferred_qty,
+                        'time_placed': time_placed,
+                        'limit_price': order.get('limit_price', None)
+                    })
+                    self.order_logs.append({
+                        'Date': current_time,
+                        'Ticker': ticker,
+                        'Action': 'BUY_PARTIALLY_DEFERRED',
+                        'Reason': f'Bought {qty} shares, deferred {deferred_qty} due to volume limits',
+                        'Price': exec_price,
+                        'Quantity': deferred_qty
+                    })
 
                 # Calculate Net Equity and max spend for margin trading
                 current_positions_value = sum(
@@ -1403,6 +1543,16 @@ class BacktestEngine:
                 trade_value = qty * exec_price
                 fee = trade_value * self.sell_fee
                 tax = trade_value * self.sell_tax
+                
+                # Apply 5% personal income tax (TNCN) on selling stock dividends under Decree 126
+                div_tax = 0.0
+                div_qty = self.dividend_shares.get(ticker, 0)
+                sold_from_div = min(qty, div_qty)
+                if sold_from_div > 0:
+                    self.dividend_shares[ticker] = div_qty - sold_from_div
+                    div_tax = sold_from_div * min(exec_price, 10000.0) * self.dividend_tax_rate
+                    tax += div_tax
+                    
                 net_proceeds = trade_value - fee - tax
 
                 self.cash += net_proceeds
@@ -1424,6 +1574,8 @@ class BacktestEngine:
                         del self.position_entry_price[ticker]
                     if ticker in self.position_highest_price:
                         del self.position_highest_price[ticker]
+                    if ticker in self.dividend_shares:
+                        del self.dividend_shares[ticker]
                 if ticker in self.sellable_shares and self.sellable_shares[ticker] == 0:
                     del self.sellable_shares[ticker]
 

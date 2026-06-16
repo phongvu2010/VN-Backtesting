@@ -2,9 +2,9 @@ import os
 import argparse
 from datetime import datetime
 import pandas as pd
-from vn_backtest.data import VNStockDataLoader
+from data import VNStockDataLoader
 from vn_backtest.engine import BacktestEngine
-from vn_backtest.strategies.ma_cross import MACrossover
+from strategies.ma_cross import MACrossover
 from vn_backtest.analysis import PerformanceAnalyzer
 from vn_backtest.reporter import ReportGenerator
 
@@ -40,14 +40,19 @@ def main():
     parser.add_argument("--market_impact", type=float, default=0.0, help="Hệ số tác động thị trường gây trượt giá động (ví dụ: 0.1)")
     parser.add_argument("--rights_listing_delay", type=int, default=90, help="Số ngày chờ giải tỏa cổ tức cổ phiếu/quyền mua (mặc định: 90 ngày)")
     parser.add_argument("--report_name", type=str, default=None, help="Tên file báo cáo HTML đầu ra (ví dụ: report_123.html)")
+    parser.add_argument("--benchmark", type=str.upper, default="VNINDEX", choices=["VNINDEX", "VN30"], help="Mã chỉ số benchmark so sánh (VNINDEX hoặc VN30)")
+    parser.add_argument("--offline", action="store_true", help="Chạy chế độ offline, không tải mới hay cập nhật từ API")
+    parser.add_argument("--dividend_tax", type=float, default=0.05, help="Thuế TNCN nhận cổ tức tiền mặt & bán cổ phiếu thưởng (mặc định: 5%%)")
     
     args = parser.parse_args()
     
     print("=" * 60)
     print(f"KHỞI CHẠY HỆ THỐNG VN-BACKTEST CHO MÃ: {args.ticker.upper()}")
+    if args.offline:
+        print("MÔ HÌNH: CHẠY OFFLINE (Không sử dụng internet)")
     print(f"Thời gian: {args.start} -> {args.end}")
     print(f"Vốn ban đầu: {args.cash:,.0f} VND")
-    config_str = f"Cấu hình: Sàn {args.exchange.upper()} (Biên độ trần/sàn)"
+    config_str = f"Cấu hình: Sàn {args.exchange.upper()} (Biên độ trần/sàn), Benchmark: {args.benchmark}"
     if not args.no_dynamic:
         config_str += ", Quy tắc lịch sử động (T+2.5/T+3 & Lô 1/10/100)"
     else:
@@ -68,11 +73,14 @@ def main():
     if args.rebalance_interval is not None:
         config_str += f", Cơ cấu danh mục ({args.rebalance_interval} phiên/lần)"
     print(config_str)
-    print(f"Chi phí: Phí GD {args.fee*100:.2f}%, Thuế bán {args.tax*100:.2f}%")
+    print(f"Chi phí: Phí GD {args.fee*100:.2f}%, Thuế bán {args.tax*100:.2f}%, Thuế cổ tức {args.dividend_tax*100:.1f}%")
+    print("=" * 60)
+    print("CẢNH BÁO: Dữ liệu tải từ vnstock có Survival Bias (chỉ có các cổ phiếu còn hoạt động).")
+    print("Để kiểm thử các cổ phiếu đã hủy niêm yết (ROS, FLC,...), vui lòng đặt tệp CSV/Parquet vào 'local_data/'.")
     print("=" * 60)
     
     # 1. Load data
-    loader = VNStockDataLoader()
+    loader = VNStockDataLoader(offline=args.offline)
     
     # Process multiple tickers
     tickers = [t.strip().upper() for t in args.ticker.split(',')]
@@ -128,17 +136,17 @@ def main():
             print(f"LỖI: Không thể tải dữ liệu cho mã {ticker}: {e}")
             return
 
-    print("\n[2/4] Đang tải dữ liệu benchmark VN-Index...")
+    print(f"\n[2/4] Đang tải dữ liệu benchmark {args.benchmark}...")
     benchmark_data = None
     try:
         benchmark_data = loader.fetch_data(
-            symbol="VNINDEX", 
+            symbol=args.benchmark, 
             start_date=args.start, 
             end_date=args.end, 
             is_index=True, 
             use_cache=not args.no_cache
         )
-        print(f"-> Đã tải {len(benchmark_data)} phiên giao dịch VN-Index.")
+        print(f"-> Đã tải {len(benchmark_data)} phiên giao dịch {args.benchmark}.")
         # Check date range overlap
         if not benchmark_data.empty:
             bench_start = benchmark_data.index[0]
@@ -146,11 +154,22 @@ def main():
             req_start = pd.to_datetime(args.start)
             req_end = pd.to_datetime(args.end)
             if bench_start > req_start or bench_end < req_end:
-                print(f"   CẢNH BÁO: Giai đoạn dữ liệu VN-Index ({bench_start.strftime('%Y-%m-%d')} -> {bench_end.strftime('%Y-%m-%d')}) "
+                print(f"   CẢNH BÁO: Giai đoạn dữ liệu {args.benchmark} ({bench_start.strftime('%Y-%m-%d')} -> {bench_end.strftime('%Y-%m-%d')}) "
                       f"không bao phủ hoàn toàn khoảng thời gian yêu cầu ({args.start} -> {args.end}). "
                       f"Các chỉ số Alpha/Beta so sánh có thể bị ảnh hưởng.")
     except Exception as e:
-        print(f"CẢNH BÁO: Không thể tải VN-Index làm benchmark ({e}). Sẽ không so sánh với VN-Index.")
+        print(f"CẢNH BÁO: Không thể tải {args.benchmark} làm benchmark ({e}). Sẽ không so sánh với benchmark.")
+
+    # Tải dữ liệu sự kiện doanh nghiệp (Cổ tức/Chia tách) NẾU có yêu cầu
+    corporate_actions = {}
+    if args.adjust_corp_actions:
+        print("\n[2.5/4] Đang tải dữ liệu sự kiện doanh nghiệp (Cổ tức/Chia tách)...")
+        for ticker in tickers:
+            try:
+                events = loader.fetch_corporate_actions(ticker, use_cache=not args.no_cache)
+                corporate_actions[ticker] = events
+            except Exception as e:
+                print(f"CẢNH BÁO: Không thể tải sự kiện cho mã {ticker}: {e}")
 
     # Prepare strategy parameters (Stop Loss, Trailing Stop, Rebalance Interval)
     strat_params = {}
@@ -170,7 +189,7 @@ def main():
             'fast_period': [5, 10, 15, 20],
             'slow_period': [20, 30, 40, 50]
         }
-        
+
         engine_kwargs = {
             'buy_fee': args.fee,
             'sell_fee': args.fee,
@@ -193,7 +212,9 @@ def main():
             'margin_interest_rate': args.margin_interest,
             'margin_maintenance_ratio': args.margin_maintenance,
             'strategy_params': strat_params,
-            'rights_listing_delay': args.rights_listing_delay
+            'rights_listing_delay': args.rights_listing_delay,
+            'corporate_actions': corporate_actions,
+            'dividend_tax_rate': args.dividend_tax,
         }
         
         optimizer = ParameterOptimizer(
@@ -234,6 +255,7 @@ def main():
     engine = BacktestEngine(
         data=stock_data,
         strategy_class=MACrossover,
+        corporate_actions=corporate_actions,
         initial_cash=args.cash,
         buy_fee=args.fee,
         sell_fee=args.fee,
@@ -257,7 +279,8 @@ def main():
         margin_interest_rate=args.margin_interest,
         margin_maintenance_ratio=args.margin_maintenance,
         strategy_params=strat_params,
-        rights_listing_delay=args.rights_listing_delay
+        rights_listing_delay=args.rights_listing_delay,
+        dividend_tax_rate=args.dividend_tax
     )
     # Inject tickers information
     engine.ticker = ",".join(tickers)
@@ -300,8 +323,8 @@ def main():
     
     if benchmark_data is not None:
         print("-" * 60)
-        print(f"Lợi nhuận VN-Index     : {metrics['benchmark_return']*100:.2f}%")
-        print(f"Lợi nhuận năm VN-Index : {metrics['benchmark_cagr']*100:.2f}%")
+        print(f"Lợi nhuận {args.benchmark}     : {metrics['benchmark_return']*100:.2f}%")
+        print(f"Lợi nhuận năm {args.benchmark} : {metrics['benchmark_cagr']*100:.2f}%")
         print(f"Outperformance         : {metrics['outperformance']*100:.2f}%")
         print(f"Hệ số Beta             : {metrics['beta']:.2f}")
         print(f"Hệ số Alpha (Hằng số)  : {metrics['alpha']*100:.2f}%")
@@ -322,7 +345,8 @@ def main():
         ticker=",".join(tickers),
         strategy_name="MA Crossover (10/20)",
         benchmark_data=benchmark_data,
-        filename=report_filename
+        filename=report_filename,
+        benchmark_symbol=args.benchmark
     )
     
     # Get absolute path for output message

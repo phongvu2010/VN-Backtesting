@@ -546,9 +546,47 @@
                                 <input type="number" id="marketImpact" class="form-control" placeholder="Ví dụ: 0.1" step="0.05" value="0.0">
                             </div>
                         </div>
-                        <div class="checkbox-group" onclick="toggleOptimizeCheckbox()">
-                            <input type="checkbox" id="optimizeCheckbox">
-                            <span>Tối ưu hóa tham số (Grid Search SMA 10/20)</span>
+                        <div class="row-grid">
+                            <div class="form-group">
+                                <label for="benchmark">Chỉ số Benchmark</label>
+                                <select id="benchmark" class="form-control" style="background: rgba(15, 23, 42, 0.9); cursor: pointer; color: var(--text-main);">
+                                    <option value="VNINDEX" selected>VN-Index (Mặc định)</option>
+                                    <option value="VN30">VN30-Index</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="forceAdjusted">Loại giá đầu vào</label>
+                                <select id="forceAdjusted" class="form-control" style="background: rgba(15, 23, 42, 0.9); cursor: pointer; color: var(--text-main);">
+                                    <option value="auto" selected>Tự động nhận diện</option>
+                                    <option value="true">Đã điều chỉnh (Adjusted)</option>
+                                    <option value="false">Chưa điều chỉnh (Raw)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="row-grid">
+                            <div class="form-group">
+                                <label for="dividendTax">Thuế cổ tức (%)</label>
+                                <input type="number" id="dividendTax" class="form-control" placeholder="Mặc định: 5" step="0.5" value="5.0">
+                            </div>
+                            <div class="form-group" style="visibility: hidden;">
+                                <!-- Spacer group to keep grid aligned -->
+                            </div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem;">
+                            <label class="checkbox-group" for="optimizeCheckbox">
+                                <input type="checkbox" id="optimizeCheckbox">
+                                <span>Tối ưu hóa tham số (Grid Search SMA 10/20)</span>
+                            </label>
+                            
+                            <label class="checkbox-group" for="corpActionsCheckbox">
+                                <input type="checkbox" id="corpActionsCheckbox">
+                                <span>Mô phỏng cổ tức & chia tách (Corporate Actions)</span>
+                            </label>
+
+                            <label class="checkbox-group" for="offlineCheckbox">
+                                <input type="checkbox" id="offlineCheckbox">
+                                <span>Chế độ Offline (Chỉ sử dụng dữ liệu cục bộ/cache)</span>
+                            </label>
                         </div>
                     </div>
 
@@ -610,10 +648,6 @@
             }
         }
 
-        function toggleOptimizeCheckbox() {
-            const cb = document.getElementById('optimizeCheckbox');
-            cb.checked = !cb.checked;
-        }
 
         // Global state variable
         let isRunning = false;
@@ -697,6 +731,11 @@
             const executionAt = document.getElementById('executionAt').value;
             const slippage = document.getElementById('slippage').value;
             const marketImpact = document.getElementById('marketImpact').value;
+            const adjustCorpActions = document.getElementById('corpActionsCheckbox').checked;
+            const benchmark = document.getElementById('benchmark').value;
+            const forceAdjusted = document.getElementById('forceAdjusted').value;
+            const dividendTax = document.getElementById('dividendTax').value;
+            const offline = document.getElementById('offlineCheckbox').checked;
             
             const payload = {
                 ticker,
@@ -710,6 +749,11 @@
                 execution_at: executionAt,
                 slippage: slippage ? parseFloat(slippage) : 0.0,
                 market_impact: marketImpact ? parseFloat(marketImpact) : 0.0,
+                adjust_corp_actions: adjustCorpActions,
+                benchmark,
+                force_adjusted: forceAdjusted,
+                dividend_tax: dividendTax ? parseFloat(dividendTax) : 5.0,
+                offline: offline,
                 optimize
             };
             
