@@ -26,3 +26,4 @@ jinja2
 TA-Lib
 flask
 gunicorn
+optuna

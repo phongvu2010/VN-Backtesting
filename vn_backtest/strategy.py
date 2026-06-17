@@ -180,6 +180,87 @@ class Strategy:
         """
         self.engine.place_target_percent_order(ticker, target_percent, time=self.current_time)
 
+    def stop_order(self, ticker: str, size=None, stop_price: float = None,
+                   limit_price: float = None, expiry_bars: int = None) -> int:
+        """
+        Place a Stop or Stop-Limit order.
+
+        A Stop order triggers as a Market order when price hits stop_price.
+        A Stop-Limit order (when limit_price is also set) triggers as a Limit order.
+
+        Args:
+            ticker (str): The ticker symbol.
+            size (float or int, optional): Order size (shares or fraction of position).
+            stop_price (float): The trigger price level.
+            limit_price (float, optional): Limit price after stop triggers.
+            expiry_bars (int, optional): Number of bars before expiry (None = GTC).
+
+        Returns:
+            int: The order ID.
+        """
+        return self.engine.place_stop_order(
+            ticker, size, stop_price, time=self.current_time,
+            limit_price=limit_price, expiry_bars=expiry_bars
+        )
+
+    def oco_order(self, ticker: str, size=None,
+                  take_profit_price: float = None, stop_loss_price: float = None,
+                  expiry_bars: int = None) -> tuple:
+        """
+        Place an OCO (One-Cancels-Other) pair: Take-Profit + Stop-Loss.
+        When one fills, the other is automatically cancelled.
+
+        Args:
+            ticker (str): The ticker symbol.
+            size (float or int): Number of shares.
+            take_profit_price (float): Limit sell price for taking profit.
+            stop_loss_price (float): Stop trigger price for cutting losses.
+            expiry_bars (int, optional): Number of bars before both orders expire.
+
+        Returns:
+            tuple: (take_profit_order_id, stop_loss_order_id)
+        """
+        return self.engine.place_oco_orders(
+            ticker, size, take_profit_price, stop_loss_price,
+            time=self.current_time, expiry_bars=expiry_bars
+        )
+
+    def cancel_order(self, order_id: int) -> bool:
+        """
+        Cancel a pending order by its ID.
+
+        Args:
+            order_id (int): The ID of the order to cancel.
+
+        Returns:
+            bool: True if cancelled, False if not found or already inactive.
+        """
+        return self.engine.cancel_order(order_id)
+
+    def cancel_all_orders(self, ticker: str = None) -> int:
+        """
+        Cancel all pending orders, optionally filtered by ticker.
+
+        Args:
+            ticker (str, optional): If provided, only cancel orders for this ticker.
+
+        Returns:
+            int: Number of orders cancelled.
+        """
+        return self.engine.cancel_all_orders(ticker)
+
+    def get_active_orders(self, ticker: str = None) -> list:
+        """
+        Get all currently active (pending/partially filled) orders.
+
+        Args:
+            ticker (str, optional): Filter by ticker.
+
+        Returns:
+            list: Active Order objects.
+        """
+        return self.engine.get_active_orders(ticker)
+
     def I(self, func: Callable[..., pd.Series], *args, **kwargs) -> pd.Series:
         """
         Declare and compute an indicator.
