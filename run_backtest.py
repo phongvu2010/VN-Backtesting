@@ -7,7 +7,6 @@ from vn_backtest.engine import BacktestEngine
 from strategies.ma_cross import MACrossover
 from vn_backtest.analysis import PerformanceAnalyzer
 from vn_backtest.reporter import ReportGenerator
-from vn_backtest.optimizer import ParameterOptimizer, SmartOptimizer
 
 def main():
     parser = argparse.ArgumentParser(description="Chương trình Backtesting Chứng khoán Việt Nam (VN-Backtest)")
@@ -44,9 +43,6 @@ def main():
     parser.add_argument("--benchmark", type=str.upper, default="VNINDEX", choices=["VNINDEX", "VN30"], help="Mã chỉ số benchmark so sánh (VNINDEX hoặc VN30)")
     parser.add_argument("--offline", action="store_true", help="Chạy chế độ offline, không tải mới hay cập nhật từ API")
     parser.add_argument("--dividend_tax", type=float, default=0.05, help="Thuế TNCN nhận cổ tức tiền mặt & bán cổ phiếu thưởng (mặc định: 5%%)")
-    parser.add_argument("--optimize_method", type=str, default="grid", choices=["grid", "optuna", "genetic"], help="Phương pháp tối ưu: grid (Grid Search), optuna (Bayesian), genetic (GA)")
-    parser.add_argument("--n_trials", type=int, default=100, help="Số lần thử cho Optuna/GA (mặc định: 100)")
-    parser.add_argument("--partial_fill", type=str, default="defer", choices=["defer", "cancel"], help="Chế độ khớp lệnh từng phần: defer (chờ khớp phiên sau) hoặc cancel (hủy phần dư)")
     
     args = parser.parse_args()
     
@@ -186,6 +182,14 @@ def main():
 
     # 2. Check if Parameter Optimization mode is requested
     if args.optimize:
+        from vn_backtest.optimizer import ParameterOptimizer
+        
+        # Grid Search for fast_period and slow_period on MACrossover
+        param_grid = {
+            'fast_period': [5, 10, 15, 20],
+            'slow_period': [20, 30, 40, 50]
+        }
+
         engine_kwargs = {
             'buy_fee': args.fee,
             'sell_fee': args.fee,
@@ -211,47 +215,21 @@ def main():
             'rights_listing_delay': args.rights_listing_delay,
             'corporate_actions': corporate_actions,
             'dividend_tax_rate': args.dividend_tax,
-            'partial_fill_mode': args.partial_fill,
         }
-
-        if args.optimize_method == 'grid':
-            # Grid Search for fast_period and slow_period on MACrossover
-            param_grid = {
-                'fast_period': [5, 10, 15, 20],
-                'slow_period': [20, 30, 40, 50]
-            }
-            optimizer = ParameterOptimizer(
-                data=stock_data,
-                strategy_class=MACrossover,
-                param_grid=param_grid,
-                initial_cash=args.cash,
-                exchange=exchanges,
-                benchmark_data=benchmark_data,
-                risk_free_rate=args.rf_rate,
-                engine_kwargs=engine_kwargs,
-                n_jobs=args.n_jobs
-            )
-            results_df = optimizer.run_optimization(sort_by="sharpe_ratio", ascending=False)
-        else:
-            # Smart Optimization: Optuna or Genetic Algorithm
-            param_space = {
-                'fast_period': (5, 30),
-                'slow_period': (20, 100),
-            }
-            optimizer = SmartOptimizer(
-                data=stock_data,
-                strategy_class=MACrossover,
-                param_space=param_space,
-                initial_cash=args.cash,
-                exchange=exchanges,
-                benchmark_data=benchmark_data,
-                risk_free_rate=args.rf_rate,
-                engine_kwargs=engine_kwargs,
-                method=args.optimize_method,
-                n_trials=args.n_trials,
-                n_jobs=args.n_jobs,
-            )
-            results_df = optimizer.run_optimization(metric="sharpe_ratio")
+        
+        optimizer = ParameterOptimizer(
+            data=stock_data,
+            strategy_class=MACrossover,
+            param_grid=param_grid,
+            initial_cash=args.cash,
+            exchange=exchanges,
+            benchmark_data=benchmark_data,
+            risk_free_rate=args.rf_rate,
+            engine_kwargs=engine_kwargs,
+            n_jobs=args.n_jobs
+        )
+        
+        results_df = optimizer.run_optimization(sort_by="sharpe_ratio", ascending=False)
         
         # Generate beautiful HTML Optimization Report
         reporter = ReportGenerator()
@@ -262,7 +240,7 @@ def main():
         report_path = reporter.generate_optimization_report(
             results_df=results_df,
             ticker=",".join(tickers),
-            strategy_name=f"MA Crossover ({args.optimize_method.upper()})",
+            strategy_name="MA Crossover (SMA Fast vs Slow)",
             filename=report_filename
         )
         
@@ -302,8 +280,7 @@ def main():
         margin_maintenance_ratio=args.margin_maintenance,
         strategy_params=strat_params,
         rights_listing_delay=args.rights_listing_delay,
-        dividend_tax_rate=args.dividend_tax,
-        partial_fill_mode=args.partial_fill
+        dividend_tax_rate=args.dividend_tax
     )
     # Inject tickers information
     engine.ticker = ",".join(tickers)
