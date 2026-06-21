@@ -4,6 +4,7 @@ from typing import Any
 from indicators import SMA
 from vn_backtest.strategy import Strategy
 
+
 class MACrossover(Strategy):
     """
     Simple Moving Average Crossover Strategy.
@@ -11,20 +12,21 @@ class MACrossover(Strategy):
     Sells when the fast SMA crosses below the slow SMA.
     Works for both single-ticker and multi-ticker backtests.
     """
+
     def __init__(self, data: Any, engine, **kwargs):
         super().__init__(data, engine, **kwargs)
-        if not hasattr(self, 'fast_period'):
+        if not hasattr(self, "fast_period"):
             self.fast_period = 10
-        if not hasattr(self, 'slow_period'):
+        if not hasattr(self, "slow_period"):
             self.slow_period = 20
         # Determine tickers list
         if isinstance(self.data, dict):
             self.tickers = list(self.data.keys())
         else:
-            self.tickers = [getattr(self.engine, 'ticker', 'FPT')]
-            
+            self.tickers = [getattr(self.engine, "ticker", "FPT")]
+
         # Rebalancing settings
-        if not hasattr(self, 'rebalance_interval'):
+        if not hasattr(self, "rebalance_interval"):
             self.rebalance_interval = None
         self.days_since_rebalance = 0
 
@@ -40,7 +42,11 @@ class MACrossover(Strategy):
     def next(self):
         # Check for periodic rebalancing
         do_rebalance = False
-        if hasattr(self, 'rebalance_interval') and self.rebalance_interval is not None and self.rebalance_interval > 0:
+        if (
+            hasattr(self, "rebalance_interval")
+            and self.rebalance_interval is not None
+            and self.rebalance_interval > 0
+        ):
             self.days_since_rebalance += 1
             if self.days_since_rebalance >= self.rebalance_interval:
                 do_rebalance = True
@@ -50,11 +56,11 @@ class MACrossover(Strategy):
         for ticker in self.tickers:
             ticker_df = self.data[ticker] if isinstance(self.data, dict) else self.data
             current_time = self.current_time
-            
+
             # Skip if ticker has no data on this day
             if current_time not in ticker_df.index:
                 continue
-                
+
             # Get integer index of current_time in ticker's DataFrame
             ticker_idx = ticker_df.index.get_loc(current_time)
             if ticker_idx < 1:
@@ -62,7 +68,7 @@ class MACrossover(Strategy):
 
             row = ticker_df.iloc[ticker_idx]
             # Skip if ticker wasn't traded (e.g. before listing or suspended)
-            if 'Traded' in row and row['Traded'] == 0:
+            if "Traded" in row and row["Traded"] == 0:
                 continue
 
             fast_ma = self.fast_mas[ticker]
@@ -75,7 +81,12 @@ class MACrossover(Strategy):
             slow_prev = slow_ma.iloc[ticker_idx - 1]
 
             # Skip if indicators are NaN
-            if pd.isna(fast_curr) or pd.isna(fast_prev) or pd.isna(slow_curr) or pd.isna(slow_prev):
+            if (
+                pd.isna(fast_curr)
+                or pd.isna(fast_prev)
+                or pd.isna(slow_curr)
+                or pd.isna(slow_prev)
+            ):
                 continue
 
             # Check positions for this ticker

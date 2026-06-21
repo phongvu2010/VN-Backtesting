@@ -11,4 +11,4 @@ services:
       - .:/home/appuser/app
       # - ./secrets/credentials.json:/app/secrets/google_credentials.json:ro
     ports:
-      - "5000:5000"
+      - "5001:5000"
